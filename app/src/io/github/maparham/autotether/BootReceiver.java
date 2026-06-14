@@ -1,4 +1,4 @@
-package com.tether.app;
+package io.github.maparham.autotether;
 
 import android.content.BroadcastReceiver;
 import android.content.Context;

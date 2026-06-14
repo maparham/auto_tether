@@ -7,8 +7,5 @@ out/
 # signing key — generated locally by build.sh, never commit
 *.keystore
 
-# downloaded dependency — fetched by app/build.sh
-app/libs/*.jar
-
 # os / editor cruft
 .DS_Store

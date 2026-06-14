@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.tether.app"
+    package="io.github.maparham.autotether"
     android:versionCode="2"
     android:versionName="0.2">
     <uses-permission android:name="android.permission.INTERNET"/>
@@ -10,16 +10,16 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <application android:label="Auto Tether" android:hasCode="true">
-        <activity android:name="com.tether.app.MainActivity" android:exported="true">
+        <activity android:name="io.github.maparham.autotether.MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-        <service android:name="com.tether.app.TetherService"
+        <service android:name="io.github.maparham.autotether.TetherService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice"/>
-        <receiver android:name="com.tether.app.BootReceiver" android:exported="true">
+        <receiver android:name="io.github.maparham.autotether.BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
             </intent-filter>

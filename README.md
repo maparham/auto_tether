@@ -20,8 +20,9 @@ The trick:
    `AttributionSource` so the tethering service accepts the caller.)
 2. **`app/`** — a foreground service that watches for the adapter / USB connection,
    then runs that helper **as shell** by speaking adb to the phone's *own* adb daemon
-   on `127.0.0.1:5555` (via [tananaev/adblib](https://github.com/tananaev/adblib)).
-   No Wi‑Fi and no second device are involved — the phone talks to itself over loopback.
+   on `127.0.0.1:5555`. The adb client is a small, self‑contained implementation baked
+   into the app (`Adb.java`) — no third‑party library. No Wi‑Fi and no second device are
+   involved; the phone talks to itself over loopback.
 
 The only catch (a no‑root limitation): the `adb tcpip 5555` foothold resets on reboot,
 so after a restart you re‑enable it once with `retether.command` (or `adb tcpip 5555`).
@@ -66,10 +67,6 @@ app/      foreground watcher app (Java, no Gradle — build.sh uses aapt2/d8/apk
 helper/   the app_process tethering helper (single Java file -> dex)
 retether.command   re-enable the adb foothold after a reboot
 ```
-
-## Credits
-
-- [tananaev/adblib](https://github.com/tananaev/adblib) — pure‑Java adb client.
 
 ## Disclaimer
 
