@@ -9,3 +9,8 @@ out/
 
 # os / editor cruft
 .DS_Store
+
+# Gradle / IDE
+.gradle/
+build/
+local.properties
