@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit;
  * Starts (or stops) Android tethering for a given type, run via:
  *   CLASSPATH=/data/local/tmp/tether.dex app_process /system/bin Main [type] [start|stop]
  * Default: type 5 (TETHERING_ETHERNET), action start.
- * Requires shell-uid privileges (TETHER_PRIVILEGED) — provided by adb shell or Shizuku.
+ * Requires shell-uid privileges (TETHER_PRIVILEGED) — i.e. run via adb shell.
  */
 public class Main {
     // TetheringManager constants

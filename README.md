@@ -1,7 +1,7 @@
 # Auto Tether
 
 Automatically turns on **Ethernet tethering** (USB‑Ethernet adapter) and **USB tethering**
-on an Android phone — **no root, no Shizuku** — so you never tap the toggle yourself.
+on an Android phone — **no root** — so you never tap the toggle yourself.
 
 - Plug a **USB‑Ethernet adapter** into the phone → Ethernet tethering turns on.
 - Plug the phone into a **computer** over USB → USB tethering turns on.
