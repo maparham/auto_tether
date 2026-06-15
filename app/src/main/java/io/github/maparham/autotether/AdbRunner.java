@@ -16,7 +16,20 @@ public class AdbRunner {
     static final String TETHER_CMD = "shell:CLASSPATH=" + DEX + " app_process /system/bin Main 5 start";
     static final String USB_CMD = "shell:CLASSPATH=" + DEX + " app_process /system/bin Main 1 start";
 
-    /** Ensure connected (auto-discovered over mDNS) and the helper dex is in place. */
+    /**
+     * Keep the adb connection alive proactively. Run from the watcher loop while idle so the
+     * connection is already up (discovered over Wi-Fi) before the adapter appears and shifts routing.
+     * Swallows failures.
+     */
+    public static synchronized void maintainConnection(Context ctx) {
+        try {
+            AdbManager m = AdbManager.getInstance(ctx);
+            if (m.isConnected()) return;
+            m.autoConnect(ctx, 12000);
+        } catch (Throwable ignore) {}
+    }
+
+    /** Ensure connected and the helper dex is in place. */
     public static synchronized void ensureReady(Context ctx) throws Exception {
         AdbManager m = AdbManager.getInstance(ctx);
         if (!m.isConnected()) m.autoConnect(ctx, 20000); // throws AdbPairingRequiredException if unpaired

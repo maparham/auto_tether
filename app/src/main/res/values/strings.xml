@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">Auto Tether</string>
     <string name="tagline">Automatic Ethernet &amp; USB tethering — no root</string>
+    <string name="acc_desc">Reads the Wireless-debugging pairing code from the Settings dialog so Auto Tether can pair automatically. It only acts on that specific dialog.</string>
 </resources>

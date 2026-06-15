@@ -40,6 +40,10 @@ public class TetherService extends Service {
     void loop() {
         while (running) {
             try {
+                // keep the adb connection alive while idle, so it's ready (and pinned to Wi-Fi)
+                // before the adapter appears and shifts network routing
+                AdbRunner.maintainConnection(this);
+
                 Set<String> now = currentTargets();
                 // newly-appeared adapter → tether
                 for (String iface : now) {

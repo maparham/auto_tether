@@ -29,23 +29,25 @@ public class MainActivity extends AppCompatActivity {
 
         ((TextView) findViewById(R.id.steps)).setText(
                 "1.  Turn Wi-Fi on.\n" +
-                "2.  Tap Start pairing below.\n" +
+                "2.  Tap Enable auto-pairing → switch Auto Tether ON in the\n" +
+                "     Accessibility list (one time).\n" +
                 "3.  Settings → Developer options → Wireless debugging → ON →\n" +
                 "     “Pair device with pairing code”.\n" +
-                "4.  Pull down the notification shade (keep that dialog open), open\n" +
-                "     the Auto Tether reply, and type:  PORT  CODE  → send.\n\n" +
+                "4.  Leave that dialog open — the app reads the code and pairs itself.\n\n" +
                 "Done. Plug in the adapter or a USB cable and tethering turns on by itself. " +
                 "After a reboot, just turn Wireless debugging back on.");
 
         status = findViewById(R.id.status);
 
         ((MaterialButton) findViewById(R.id.pairBtn)).setOnClickListener(v -> {
-            PairReceiver.show(getApplicationContext(),
-                    "Open the Wireless-debugging pair dialog, then reply here with:  PORT  CODE");
-            setStatus("Pairing notification posted.\nOpen the pair dialog, pull down the shade, and reply.");
+            startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            setStatus("Switch \"Auto Tether\" ON in the Accessibility list, then open\n" +
+                    "the Wireless-debugging pair dialog — it pairs automatically.");
         });
 
         ((MaterialButton) findViewById(R.id.watchBtn)).setOnClickListener(v -> startWatcher());
+
+        startWatcher(); // ensure the background watcher is running whenever the app is opened
     }
 
     /** The phone's Wi-Fi IPv4 (where the pairing/connect services bind). */

@@ -71,8 +71,8 @@
                 android:id="@+id/pairBtn"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Start pairing"
-                app:icon="@android:drawable/ic_menu_share"
+                android:text="Enable auto-pairing"
+                app:icon="@android:drawable/ic_menu_manage"
                 android:textSize="16sp"
                 android:paddingVertical="12dp"/>
 
