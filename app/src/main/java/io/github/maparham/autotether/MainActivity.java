@@ -55,11 +55,22 @@ public class MainActivity extends AppCompatActivity {
             case WIFI:          return "Turn Wi-Fi on — pairing and tethering need it.";
             case DEVOPTS:       return "Enable Developer options: Settings → About phone →\n" +
                     "tap “Build number” 7 times.";
-            case WIRELESS_DEBUG:return isPaired()
-                    ? "Wireless debugging is off (it resets after a reboot).\nTap the button above to turn it back on."
-                    : "Tap the button above and turn “Use wireless debugging” ON.";
-            case PAIR:          return "Tap the button above — it opens the pairing dialog and\n" +
-                    "pairs this device automatically.";
+            case WIRELESS_DEBUG: return isPaired()
+                    ? "Wireless debugging turned off after the reboot.\n" +
+                      "Tap the button above → it opens Developer options:\n" +
+                      "  1. Tap “Wireless debugging”\n" +
+                      "  2. Turn “Use wireless debugging” ON\n" +
+                      "Then it reconnects on its own."
+                    : "Tap the button above → it opens Developer options:\n" +
+                      "  1. Tap “Wireless debugging”\n" +
+                      "  2. Turn “Use wireless debugging” ON\n" +
+                      "  3. Tap “Pair device with pairing code” — keep it open\n" +
+                      "The app reads the code and pairs itself.";
+            case PAIR:          return "Tap the button above → it opens Developer options:\n" +
+                    "  1. Tap “Wireless debugging”\n" +
+                    "  2. Tap “Pair device with pairing code” — keep it open\n" +
+                    "The app reads the code and pairs itself.\n" +
+                    "(It tries steps 1–2 for you; do them yourself if needed.)";
             default:            return "Ready ✓  Plug in the adapter or a USB cable —\ntethering turns on automatically. You can close the app.";
         }
     }
@@ -127,18 +138,11 @@ public class MainActivity extends AppCompatActivity {
                         "Settings → About phone → tap “Build number” 7 times,\nthen come back.");
                 break;
             case WIRELESS_DEBUG:
-                PairAccessibilityService.navigateWdUntil = System.currentTimeMillis() + 25000;
-                openWirelessDebugging();
-                setStatus("Turn “Use wireless debugging” ON.\n" +
-                        "The app then opens the pairing dialog and pairs by itself —\n" +
-                        "don’t touch anything.");
-                break;
             case PAIR:
                 PairAccessibilityService.navigateWdUntil = System.currentTimeMillis() + 25000;
+                String steps = statusHint(); // capture the detailed steps before we navigate away
                 openWirelessDebugging();
-                setStatus("Opening the pairing dialog and pairing automatically —\n" +
-                        "don’t touch anything.\n\n" +
-                        "(If nothing happens, tap “Pair device with pairing code” yourself.)");
+                setStatus(steps);
                 break;
             default:
                 setStatus("All set ✓ Plug in the adapter or a USB cable —\ntethering turns on by itself.");

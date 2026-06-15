@@ -112,8 +112,8 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="Idle."
-                        android:fontFamily="monospace"
-                        android:textSize="12sp"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
+                        android:lineSpacingExtra="6dp"
                         android:textColor="?attr/colorOnSurfaceVariant"/>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
