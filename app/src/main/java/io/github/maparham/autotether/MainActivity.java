@@ -40,37 +40,79 @@ public class MainActivity extends AppCompatActivity {
 
         status = findViewById(R.id.status);
 
-        ((MaterialButton) findViewById(R.id.pairBtn)).setOnClickListener(v -> {
-            if (!isAutoPairingOn()) {
-                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
-                setStatus("Switch \"Auto Tether\" ON in the Accessibility list, then come back.");
-            } else if (!hasWifi()) {
-                startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS));
-                setStatus("Connect to a Wi-Fi network first (pairing needs it),\nthen come back and tap again.");
-            } else if (!devOptionsOn()) {
-                setStatus("Enable Developer options first:\n" +
-                        "Settings → About phone → tap “Build number” 7 times.\n" +
-                        "Then come back and tap again.");
-            } else {
-                // ask the accessibility service to tap into Wireless debugging once Developer options opens
-                PairAccessibilityService.navigateWdUntil = System.currentTimeMillis() + 15000;
-                openWirelessDebugging();
-                setStatus("Opening Wireless debugging…\n" +
-                        "Tap “Pair device with pairing code” and leave that dialog open —\n" +
-                        "the app reads the code and pairs itself.");
-            }
-        });
-
+        ((MaterialButton) findViewById(R.id.pairBtn)).setOnClickListener(v -> onPairButton());
         ((MaterialButton) findViewById(R.id.watchBtn)).setOnClickListener(v -> startWatcher());
 
         startWatcher(); // ensure the background watcher is running whenever the app is opened
     }
 
+    // Setup steps, in prerequisite order.
+    static final int ACCESSIBILITY = 0, WIFI = 1, DEVOPTS = 2, WIRELESS_DEBUG = 3, PAIR = 4, DONE = 5;
+
+    int nextStep() {
+        if (!isAutoPairingOn()) return ACCESSIBILITY;
+        if (!hasWifi()) return WIFI;
+        if (!devOptionsOn()) return DEVOPTS;
+        if (!wirelessDebuggingOn()) return WIRELESS_DEBUG;
+        if (!isPaired()) return PAIR;
+        return DONE;
+    }
+
+    String stepLabel(int step) {
+        switch (step) {
+            case ACCESSIBILITY: return "Enable auto-pairing";
+            case WIFI:          return "Connect Wi-Fi";
+            case DEVOPTS:       return "Enable Developer options";
+            case WIRELESS_DEBUG:return "Turn on Wireless debugging";
+            case PAIR:          return "Pair this device";
+            default:            return "Paired ✓ — all set";
+        }
+    }
+
+    void onPairButton() {
+        switch (nextStep()) {
+            case ACCESSIBILITY:
+                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                setStatus("Switch \"Auto Tether\" ON in the Accessibility list, then come back.");
+                break;
+            case WIFI:
+                startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS));
+                setStatus("Connect to a Wi-Fi network, then come back.");
+                break;
+            case DEVOPTS:
+                setStatus("Enable Developer options first:\n" +
+                        "Settings → About phone → tap “Build number” 7 times,\nthen come back.");
+                break;
+            case WIRELESS_DEBUG:
+                PairAccessibilityService.navigateWdUntil = System.currentTimeMillis() + 15000;
+                openWirelessDebugging();
+                setStatus("Turn “Use wireless debugging” ON, then come back.");
+                break;
+            case PAIR:
+                PairAccessibilityService.navigateWdUntil = System.currentTimeMillis() + 15000;
+                openWirelessDebugging();
+                setStatus("Tap “Pair device with pairing code” and leave it open —\nthe app pairs itself.");
+                break;
+            default:
+                setStatus("All set ✓ Plug in the adapter or a USB cable —\ntethering turns on by itself.");
+        }
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
-        MaterialButton pair = findViewById(R.id.pairBtn);
-        pair.setText(isAutoPairingOn() ? "Auto-pairing enabled ✓" : "Enable auto-pairing");
+        ((MaterialButton) findViewById(R.id.pairBtn)).setText(stepLabel(nextStep()));
+    }
+
+    /** Whether Wireless debugging is enabled. */
+    boolean wirelessDebuggingOn() {
+        try { return Settings.Global.getInt(getContentResolver(), "adb_wifi_enabled", 0) == 1; }
+        catch (Exception e) { return false; }
+    }
+
+    /** Whether this device has completed pairing at least once. */
+    boolean isPaired() {
+        return getSharedPreferences("autotether", MODE_PRIVATE).getBoolean("paired", false);
     }
 
     /** Whether Developer options are enabled. */

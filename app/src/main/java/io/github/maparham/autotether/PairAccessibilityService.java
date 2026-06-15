@@ -66,6 +66,8 @@ public class PairAccessibilityService extends AccessibilityService {
                 if (!ok) { PairReceiver.show(getApplicationContext(), "Pairing failed — reopen the pair dialog."); return; }
                 PairReceiver.show(getApplicationContext(), "Paired ✓ connecting…");
                 AdbRunner.ensureReady(getApplicationContext());
+                getApplicationContext().getSharedPreferences("autotether", MODE_PRIVATE)
+                        .edit().putBoolean("paired", true).apply();
                 PairReceiver.show(getApplicationContext(), "Connected ✓ — done. Tethering will turn on by itself.");
                 Intent s = new Intent(getApplicationContext(), TetherService.class);
                 if (Build.VERSION.SDK_INT >= 26) startForegroundService(s); else startService(s);
