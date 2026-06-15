@@ -53,7 +53,10 @@ public class MainActivity extends AppCompatActivity {
             case ACCESSIBILITY: return bold("Tap the button above → switch Auto Tether ON in the\n" +
                     "Accessibility list. It reads the pairing code for you.",
                     "Auto Tether", "Accessibility");
-            case WIFI:          return bold("Turn Wi-Fi on — pairing and tethering need it.", "Wi-Fi");
+            case WIFI:          return isPaired()
+                    ? bold("After a phone restart, turn Wi-Fi on for ~15 seconds so the app\n" +
+                      "can re-arm no-Wi-Fi mode — then you can turn Wi-Fi off again.", "Wi-Fi")
+                    : bold("Turn Wi-Fi on — pairing needs it.", "Wi-Fi");
             case DEVOPTS:       return bold("Enable Developer options: Settings → About phone →\n" +
                     "tap Build number 7 times.", "Developer options", "About phone", "Build number");
             case WIRELESS_DEBUG: return isPaired()
@@ -76,7 +79,8 @@ public class MainActivity extends AppCompatActivity {
                     "(It tries steps 1–2 for you; do them yourself if needed.)",
                     "Wireless debugging", "Pair device with pairing code", "Developer options");
             default:            return bold("Ready ✓  Plug in the adapter or a USB cable —\n" +
-                    "tethering turns on automatically. You can close the app.", "");
+                    "tethering turns on automatically. Wi-Fi can be off; you can\n" +
+                    "close the app. (After a phone restart, see the note above.)", "");
         }
     }
 
@@ -97,10 +101,11 @@ public class MainActivity extends AppCompatActivity {
 
     String checklist() {
         if (isPaired()) {
-            // Setup is done; only the bits that reset still matter.
-            if (hasWifi() && wirelessDebuggingOn())
-                return "✅  Paired & ready.\n\nPlug in the adapter or a USB cable —\ntethering turns on by itself.";
-            return "Paired ✓ — to reconnect, turn these on:\n\n"
+            // Setup is done. Once the no-Wi-Fi door is armed, nothing else is needed.
+            if (AdbRunner.tcpipArmed)
+                return "✅  Paired & ready — works without Wi-Fi.\n\nPlug in the adapter or a USB cable —\ntethering turns on by itself.";
+            // Fresh boot: the no-Wi-Fi door resets on restart; re-arm it with a brief Wi-Fi moment.
+            return "Paired ✓ — after a restart, turn these on briefly so it\ncan re-arm (then Wi-Fi can go back off):\n\n"
                  + mark(hasWifi())             + "Wi-Fi connected\n"
                  + mark(wirelessDebuggingOn()) + "Wireless debugging on";
         }
@@ -119,7 +124,9 @@ public class MainActivity extends AppCompatActivity {
 
     int nextStep() {
         if (isPaired()) {
-            // already set up — only the bits that reset matter
+            // Once the loopback door is open (adb tcpip armed), tethering needs no Wi-Fi at all.
+            if (AdbRunner.tcpipArmed) return DONE;
+            // Otherwise (fresh boot — tcpip resets) we need Wi-Fi + Wireless debugging briefly to re-arm.
             if (!hasWifi()) return WIFI;
             if (!wirelessDebuggingOn()) return WIRELESS_DEBUG;
             return DONE;

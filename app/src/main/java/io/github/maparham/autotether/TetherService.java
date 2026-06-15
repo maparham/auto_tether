@@ -10,7 +10,9 @@ import android.util.Log;
 
 import java.net.NetworkInterface;
 import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -23,7 +25,11 @@ public class TetherService extends Service {
     // Matches the system's ethernet/usb tether interface filter.
     static final Pattern TARGET = Pattern.compile("^(eth|usb)\\d+$");
     volatile boolean running = false;
-    final Set<String> seen = new HashSet<>();
+    // How many consecutive polls an interface must be present before we tether it, so the
+    // interface (and EthernetManager) has settled — tethering a half-up eth0 fails with ENODEV.
+    static final int STABLE_POLLS = 3; // ~7.5s at the 2.5s poll interval
+    final Map<String, Integer> presentCount = new HashMap<>();
+    final Set<String> tethered = new HashSet<>();
     boolean usbTetherDone = false;
     String status = "watching for adapter…";
 
@@ -45,10 +51,14 @@ public class TetherService extends Service {
                 AdbRunner.maintainConnection(this);
 
                 Set<String> now = currentTargets();
-                // newly-appeared adapter → tether
+                // Tether an adapter only once it's been present for a few polls — firing the
+                // instant eth0 appears races interface setup and fails ("No such device").
                 for (String iface : now) {
-                    if (!seen.contains(iface)) {
-                        Log.i("AutoTether", "adapter appeared: " + iface + " → tethering");
+                    int c = (presentCount.containsKey(iface) ? presentCount.get(iface) : 0) + 1;
+                    presentCount.put(iface, c);
+                    if (c == STABLE_POLLS && !tethered.contains(iface)) {
+                        tethered.add(iface);
+                        Log.i("AutoTether", "adapter stable: " + iface + " → tethering");
                         update("adapter " + iface + " connected, enabling…");
                         try {
                             String r = AdbRunner.tether(this);
@@ -59,11 +69,13 @@ public class TetherService extends Service {
                         }
                     }
                 }
-                seen.clear();
-                seen.addAll(now);
+                // Forget interfaces that went away, so a re-plug re-arms the stabilize-then-tether cycle.
+                presentCount.keySet().retainAll(now);
+                tethered.retainAll(now);
 
-                // USB tethering: phone plugged into a computer (peripheral, "configured").
-                if (isUsbConfigured()) {
+                // USB tethering: phone plugged into a computer (peripheral). Fires even when the
+                // screen is locked (charge-only) — startTethering switches USB into data mode.
+                if (usbHostPresent()) {
                     if (!usbTetherDone) {
                         update("USB connected, enabling USB tethering…");
                         try {
@@ -95,12 +107,20 @@ public class TetherService extends Service {
         return s;
     }
 
-    /** True when the phone is plugged into a computer as a USB peripheral (vs. hosting the adapter). */
-    boolean isUsbConfigured() {
+    /**
+     * True when the phone is plugged into a computer as a USB peripheral (vs. hosting the adapter
+     * or sitting on a dumb charger).
+     *
+     * We key on "connected" only, NOT "configured": a computer enumerates the phone so connected=true
+     * even while the screen is locked (charge-only, configured=false), whereas a dumb wall charger
+     * never enumerates (connected=false). startTethering(USB) then switches it into data mode — which
+     * works even while locked — so requiring "configured" here would wrongly skip the locked case.
+     */
+    boolean usbHostPresent() {
         try {
             android.content.Intent i = registerReceiver(null,
                 new android.content.IntentFilter("android.hardware.usb.action.USB_STATE"));
-            return i != null && i.getBooleanExtra("connected", false) && i.getBooleanExtra("configured", false);
+            return i != null && i.getBooleanExtra("connected", false);
         } catch (Throwable t) { return false; }
     }
 
