@@ -27,24 +27,29 @@ public class MainActivity extends AppCompatActivity {
             try { requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1); } catch (Throwable ignore) {}
         }
         setContentView(R.layout.activity_main);
-
-        ((TextView) findViewById(R.id.steps)).setText(
-                "1.  Turn Wi-Fi on.\n" +
-                "2.  Tap Enable auto-pairing → switch Auto Tether ON in the\n" +
-                "     Accessibility list (one time).\n" +
-                "3.  Settings → Developer options → Wireless debugging → ON →\n" +
-                "     “Pair device with pairing code”.\n" +
-                "4.  Leave that dialog open — the app reads the code and pairs itself.\n\n" +
-                "Done. Plug in the adapter or a USB cable and tethering turns on by itself. " +
-                "After a reboot, just turn Wireless debugging back on.");
-
         status = findViewById(R.id.status);
 
         ((MaterialButton) findViewById(R.id.pairBtn)).setOnClickListener(v -> onPairButton());
         ((MaterialButton) findViewById(R.id.watchBtn)).setOnClickListener(v -> startWatcher());
 
+        refreshUi();
         startWatcher(); // ensure the background watcher is running whenever the app is opened
     }
+
+    void refreshUi() {
+        ((MaterialButton) findViewById(R.id.pairBtn)).setText(stepLabel(nextStep()));
+        ((TextView) findViewById(R.id.steps)).setText(checklist());
+    }
+
+    String checklist() {
+        return mark(isAutoPairingOn())    + "Auto-pairing enabled\n"
+             + mark(hasWifi())            + "Wi-Fi connected\n"
+             + mark(devOptionsOn())       + "Developer options on\n"
+             + mark(wirelessDebuggingOn())+ "Wireless debugging on\n"
+             + mark(isPaired())           + "Device paired";
+    }
+
+    static String mark(boolean ok) { return ok ? "✅  " : "⬜  "; }
 
     // Setup steps, in prerequisite order.
     static final int ACCESSIBILITY = 0, WIFI = 1, DEVOPTS = 2, WIRELESS_DEBUG = 3, PAIR = 4, DONE = 5;
@@ -101,7 +106,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        ((MaterialButton) findViewById(R.id.pairBtn)).setText(stepLabel(nextStep()));
+        refreshUi();
     }
 
     /** Whether Wireless debugging is enabled. */

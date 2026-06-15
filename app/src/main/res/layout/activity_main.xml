@@ -54,16 +54,16 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="One-time setup"
+                        android:text="Setup status"
                         android:textAppearance="?attr/textAppearanceTitleMedium"
-                        android:paddingBottom="8dp"/>
+                        android:paddingBottom="12dp"/>
 
                     <TextView
                         android:id="@+id/steps"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:textAppearance="?attr/textAppearanceBodyMedium"
-                        android:lineSpacingExtra="4dp"/>
+                        android:textAppearance="?attr/textAppearanceBodyLarge"
+                        android:lineSpacingExtra="10dp"/>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
