@@ -30,10 +30,13 @@ public class MainActivity extends AppCompatActivity {
         status = findViewById(R.id.status);
 
         ((MaterialButton) findViewById(R.id.pairBtn)).setOnClickListener(v -> onPairButton());
-        ((MaterialButton) findViewById(R.id.watchBtn)).setOnClickListener(v -> startWatcher());
+        ((MaterialButton) findViewById(R.id.watchBtn)).setOnClickListener(v -> {
+            startWatcher();
+            status.setText("Background watcher (re)started.");
+        });
 
-        refreshUi();
         startWatcher(); // ensure the background watcher is running whenever the app is opened
+        refreshUi();
     }
 
     void refreshUi() {
@@ -41,6 +44,21 @@ public class MainActivity extends AppCompatActivity {
         ((TextView) findViewById(R.id.steps)).setText(checklist());
         ((TextView) findViewById(R.id.cardTitle)).setText(
                 isPaired() ? "Tethering status" : "Pair this device for Wireless debugging");
+        status.setText(statusHint());
+    }
+
+    /** A short, state-appropriate line for the Status box. */
+    String statusHint() {
+        switch (nextStep()) {
+            case ACCESSIBILITY: return "Step 1: tap the button above to enable auto-pairing.";
+            case WIFI:          return "Turn Wi-Fi on — pairing and tethering need it.";
+            case DEVOPTS:       return "Enable Developer options to continue.";
+            case WIRELESS_DEBUG:return isPaired()
+                    ? "Wireless debugging is off (it resets on reboot). Tap above to turn it on."
+                    : "Turn on Wireless debugging (the button above).";
+            case PAIR:          return "Tap the button above — the app pairs this device by itself.";
+            default:            return "Ready ✓  Plug in the adapter or a USB cable —\ntethering turns on automatically. You can close the app.";
+        }
     }
 
     String checklist() {
@@ -200,7 +218,6 @@ public class MainActivity extends AppCompatActivity {
     void startWatcher() {
         Intent i = new Intent(this, TetherService.class);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
-        setStatus("Watcher running — you can close the app.");
     }
 
     void setStatus(String s) {
