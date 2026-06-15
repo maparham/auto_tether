@@ -47,32 +47,52 @@ public class MainActivity extends AppCompatActivity {
         status.setText(statusHint());
     }
 
-    /** A short, state-appropriate line for the Status box. */
-    String statusHint() {
+    /** A short, state-appropriate line for the Status box (UI-element names in bold). */
+    CharSequence statusHint() {
         switch (nextStep()) {
-            case ACCESSIBILITY: return "Tap the button above → switch Auto Tether ON in the\n" +
-                    "Accessibility list. It reads the pairing code for you.";
-            case WIFI:          return "Turn Wi-Fi on — pairing and tethering need it.";
-            case DEVOPTS:       return "Enable Developer options: Settings → About phone →\n" +
-                    "tap “Build number” 7 times.";
+            case ACCESSIBILITY: return bold("Tap the button above → switch Auto Tether ON in the\n" +
+                    "Accessibility list. It reads the pairing code for you.",
+                    "Auto Tether", "Accessibility");
+            case WIFI:          return bold("Turn Wi-Fi on — pairing and tethering need it.", "Wi-Fi");
+            case DEVOPTS:       return bold("Enable Developer options: Settings → About phone →\n" +
+                    "tap Build number 7 times.", "Developer options", "About phone", "Build number");
             case WIRELESS_DEBUG: return isPaired()
-                    ? "Wireless debugging turned off after the reboot.\n" +
+                    ? bold("Wireless debugging turned off after the reboot.\n" +
                       "Tap the button above → it opens Developer options:\n" +
-                      "  1. Tap “Wireless debugging”\n" +
-                      "  2. Turn “Use wireless debugging” ON\n" +
-                      "Then it reconnects on its own."
-                    : "Tap the button above → it opens Developer options:\n" +
-                      "  1. Tap “Wireless debugging”\n" +
-                      "  2. Turn “Use wireless debugging” ON\n" +
-                      "  3. Tap “Pair device with pairing code” — keep it open\n" +
-                      "The app reads the code and pairs itself.";
-            case PAIR:          return "Tap the button above → it opens Developer options:\n" +
-                    "  1. Tap “Wireless debugging”\n" +
-                    "  2. Tap “Pair device with pairing code” — keep it open\n" +
+                      "  1. Tap Wireless debugging\n" +
+                      "  2. Turn Use wireless debugging ON\n" +
+                      "Then it reconnects on its own.",
+                      "Wireless debugging", "Use wireless debugging", "Developer options")
+                    : bold("Tap the button above → it opens Developer options:\n" +
+                      "  1. Tap Wireless debugging\n" +
+                      "  2. Turn Use wireless debugging ON\n" +
+                      "  3. Tap Pair device with pairing code — keep it open\n" +
+                      "The app reads the code and pairs itself.",
+                      "Wireless debugging", "Use wireless debugging", "Pair device with pairing code", "Developer options");
+            case PAIR:          return bold("Tap the button above → it opens Developer options:\n" +
+                    "  1. Tap Wireless debugging\n" +
+                    "  2. Tap Pair device with pairing code — keep it open\n" +
                     "The app reads the code and pairs itself.\n" +
-                    "(It tries steps 1–2 for you; do them yourself if needed.)";
-            default:            return "Ready ✓  Plug in the adapter or a USB cable —\ntethering turns on automatically. You can close the app.";
+                    "(It tries steps 1–2 for you; do them yourself if needed.)",
+                    "Wireless debugging", "Pair device with pairing code", "Developer options");
+            default:            return bold("Ready ✓  Plug in the adapter or a USB cable —\n" +
+                    "tethering turns on automatically. You can close the app.", "");
         }
+    }
+
+    /** Returns text with each given phrase styled bold. */
+    static CharSequence bold(String text, String... phrases) {
+        android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder(text);
+        for (String p : phrases) {
+            if (p == null || p.isEmpty()) continue;
+            int i = 0;
+            while ((i = text.indexOf(p, i)) >= 0) {
+                sb.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
+                        i, i + p.length(), android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                i += p.length();
+            }
+        }
+        return sb;
     }
 
     String checklist() {
@@ -126,21 +146,22 @@ public class MainActivity extends AppCompatActivity {
         switch (nextStep()) {
             case ACCESSIBILITY:
                 startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
-                setStatus("In the list that opened, tap \"Auto Tether\" and switch it ON,\n" +
-                        "then come back. (This lets the app read the pairing code for you.)");
+                setStatus(bold("In the list that opened, tap Auto Tether and switch it ON,\n" +
+                        "then come back. (This lets the app read the pairing code for you.)", "Auto Tether"));
                 break;
             case WIFI:
                 startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS));
-                setStatus("Connect to a Wi-Fi network, then come back.");
+                setStatus(bold("Connect to a Wi-Fi network, then come back.", "Wi-Fi"));
                 break;
             case DEVOPTS:
-                setStatus("Enable Developer options first:\n" +
-                        "Settings → About phone → tap “Build number” 7 times,\nthen come back.");
+                setStatus(bold("Enable Developer options first:\n" +
+                        "Settings → About phone → tap Build number 7 times, then come back.",
+                        "Developer options", "About phone", "Build number"));
                 break;
             case WIRELESS_DEBUG:
             case PAIR:
                 PairAccessibilityService.navigateWdUntil = System.currentTimeMillis() + 25000;
-                String steps = statusHint(); // capture the detailed steps before we navigate away
+                CharSequence steps = statusHint(); // capture the detailed steps before we navigate away
                 openWirelessDebugging();
                 setStatus(steps);
                 break;
@@ -228,8 +249,8 @@ public class MainActivity extends AppCompatActivity {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
     }
 
-    void setStatus(String s) {
-        Log.i("AutoTether", s);
+    void setStatus(CharSequence s) {
+        Log.i("AutoTether", s.toString());
         runOnUiThread(() -> status.setText(s));
     }
 }
