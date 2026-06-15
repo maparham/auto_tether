@@ -42,6 +42,15 @@ public class MainActivity extends AppCompatActivity {
     }
 
     String checklist() {
+        if (isPaired()) {
+            // Setup is done; only the bits that reset still matter.
+            if (hasWifi() && wirelessDebuggingOn())
+                return "✅  Paired & ready.\n\nPlug in the adapter or a USB cable —\ntethering turns on by itself.";
+            return "Paired ✓ — to reconnect, turn these on:\n\n"
+                 + mark(hasWifi())             + "Wi-Fi connected\n"
+                 + mark(wirelessDebuggingOn()) + "Wireless debugging on";
+        }
+        // First-time setup.
         return mark(isAutoPairingOn())    + "Auto-pairing enabled\n"
              + mark(hasWifi())            + "Wi-Fi connected\n"
              + mark(devOptionsOn())       + "Developer options on\n"
@@ -55,12 +64,17 @@ public class MainActivity extends AppCompatActivity {
     static final int ACCESSIBILITY = 0, WIFI = 1, DEVOPTS = 2, WIRELESS_DEBUG = 3, PAIR = 4, DONE = 5;
 
     int nextStep() {
+        if (isPaired()) {
+            // already set up — only the bits that reset matter
+            if (!hasWifi()) return WIFI;
+            if (!wirelessDebuggingOn()) return WIRELESS_DEBUG;
+            return DONE;
+        }
         if (!isAutoPairingOn()) return ACCESSIBILITY;
         if (!hasWifi()) return WIFI;
         if (!devOptionsOn()) return DEVOPTS;
         if (!wirelessDebuggingOn()) return WIRELESS_DEBUG;
-        if (!isPaired()) return PAIR;
-        return DONE;
+        return PAIR;
     }
 
     String stepLabel(int step) {
