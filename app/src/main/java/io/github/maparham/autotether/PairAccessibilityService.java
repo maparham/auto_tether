@@ -33,9 +33,9 @@ public class PairAccessibilityService extends AccessibilityService {
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return;
 
-        // Requested navigation: tap "Wireless debugging" in the Developer-options list.
+        // Requested navigation: walk into Wireless debugging and open the pairing dialog.
         if (System.currentTimeMillis() < navigateWdUntil) {
-            if (tapWirelessDebugging(root)) { navigateWdUntil = 0; scrolls = 0; }
+            if (navigateAndPair(root)) { navigateWdUntil = 0; scrolls = 0; }
         }
 
         StringBuilder sb = new StringBuilder();
@@ -96,19 +96,32 @@ public class PairAccessibilityService extends AccessibilityService {
         for (int i = 0; i < node.getChildCount(); i++) collect(node.getChild(i), sb);
     }
 
-    private boolean tapWirelessDebugging(AccessibilityNodeInfo root) {
-        List<AccessibilityNodeInfo> nodes = root.findAccessibilityNodeInfosByText("Wireless debugging");
-        if (nodes != null) {
-            for (AccessibilityNodeInfo n : nodes) {
-                AccessibilityNodeInfo c = n;
-                for (int i = 0; i < 6 && c != null && !c.isClickable(); i++) c = c.getParent();
-                if (c != null && c.isClickable()) { c.performAction(AccessibilityNodeInfo.ACTION_CLICK); return true; }
-            }
-        }
+    /**
+     * Drive the UI toward pairing: open the pairing dialog if we can see it; otherwise step into
+     * "Wireless debugging"; otherwise scroll to find one. Returns true when the final target is tapped.
+     */
+    private boolean navigateAndPair(AccessibilityNodeInfo root) {
+        if (clickByText(root, "Pair device with pairing code")) return true; // dialog opens → pairing proceeds
+        if (clickByText(root, "Wireless debugging")) { scrolls = 0; return false; } // step into the WD screen
         if (scrolls++ < 15) {
             AccessibilityNodeInfo sc = findScrollable(root);
             if (sc != null) sc.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
         } else { navigateWdUntil = 0; scrolls = 0; }
+        return false;
+    }
+
+    private boolean clickByText(AccessibilityNodeInfo root, String text) {
+        List<AccessibilityNodeInfo> nodes = root.findAccessibilityNodeInfosByText(text);
+        if (nodes == null) return false;
+        for (AccessibilityNodeInfo n : nodes) {
+            if (n.getText() == null || !n.getText().toString().equalsIgnoreCase(text)) continue;
+            AccessibilityNodeInfo c = n;
+            for (int i = 0; i < 6 && c != null && !c.isClickable(); i++) c = c.getParent();
+            if (c != null && c.isClickable() && c.isEnabled()) {
+                c.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                return true;
+            }
+        }
         return false;
     }
 

@@ -39,6 +39,8 @@ public class MainActivity extends AppCompatActivity {
     void refreshUi() {
         ((MaterialButton) findViewById(R.id.pairBtn)).setText(stepLabel(nextStep()));
         ((TextView) findViewById(R.id.steps)).setText(checklist());
+        ((TextView) findViewById(R.id.cardTitle)).setText(
+                isPaired() ? "Tethering status" : "Pair this device for Wireless debugging");
     }
 
     String checklist() {
@@ -103,14 +105,18 @@ public class MainActivity extends AppCompatActivity {
                         "Settings → About phone → tap “Build number” 7 times,\nthen come back.");
                 break;
             case WIRELESS_DEBUG:
-                PairAccessibilityService.navigateWdUntil = System.currentTimeMillis() + 15000;
+                PairAccessibilityService.navigateWdUntil = System.currentTimeMillis() + 25000;
                 openWirelessDebugging();
-                setStatus("Turn “Use wireless debugging” ON, then come back.");
+                setStatus("Turn “Use wireless debugging” ON.\n" +
+                        "The app then opens the pairing dialog and pairs by itself —\n" +
+                        "don’t touch anything.");
                 break;
             case PAIR:
-                PairAccessibilityService.navigateWdUntil = System.currentTimeMillis() + 15000;
+                PairAccessibilityService.navigateWdUntil = System.currentTimeMillis() + 25000;
                 openWirelessDebugging();
-                setStatus("Tap “Pair device with pairing code” and leave it open —\nthe app pairs itself.");
+                setStatus("Opening the pairing dialog and pairing automatically —\n" +
+                        "don’t touch anything.\n\n" +
+                        "(If nothing happens, tap “Pair device with pairing code” yourself.)");
                 break;
             default:
                 setStatus("All set ✓ Plug in the adapter or a USB cable —\ntethering turns on by itself.");
