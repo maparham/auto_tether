@@ -50,13 +50,16 @@ public class MainActivity extends AppCompatActivity {
     /** A short, state-appropriate line for the Status box. */
     String statusHint() {
         switch (nextStep()) {
-            case ACCESSIBILITY: return "Step 1: tap the button above to enable auto-pairing.";
+            case ACCESSIBILITY: return "Tap the button above → switch Auto Tether ON in the\n" +
+                    "Accessibility list. It reads the pairing code for you.";
             case WIFI:          return "Turn Wi-Fi on — pairing and tethering need it.";
-            case DEVOPTS:       return "Enable Developer options to continue.";
+            case DEVOPTS:       return "Enable Developer options: Settings → About phone →\n" +
+                    "tap “Build number” 7 times.";
             case WIRELESS_DEBUG:return isPaired()
-                    ? "Wireless debugging is off (it resets on reboot). Tap above to turn it on."
-                    : "Turn on Wireless debugging (the button above).";
-            case PAIR:          return "Tap the button above — the app pairs this device by itself.";
+                    ? "Wireless debugging is off (it resets after a reboot).\nTap the button above to turn it back on."
+                    : "Tap the button above and turn “Use wireless debugging” ON.";
+            case PAIR:          return "Tap the button above — it opens the pairing dialog and\n" +
+                    "pairs this device automatically.";
             default:            return "Ready ✓  Plug in the adapter or a USB cable —\ntethering turns on automatically. You can close the app.";
         }
     }
@@ -71,7 +74,7 @@ public class MainActivity extends AppCompatActivity {
                  + mark(wirelessDebuggingOn()) + "Wireless debugging on";
         }
         // First-time setup.
-        return mark(isAutoPairingOn())    + "Auto-pairing enabled\n"
+        return mark(isAutoPairingOn())    + "Accessibility access on\n"
              + mark(hasWifi())            + "Wi-Fi connected\n"
              + mark(devOptionsOn())       + "Developer options on\n"
              + mark(wirelessDebuggingOn())+ "Wireless debugging on\n"
@@ -99,7 +102,7 @@ public class MainActivity extends AppCompatActivity {
 
     String stepLabel(int step) {
         switch (step) {
-            case ACCESSIBILITY: return "Enable auto-pairing";
+            case ACCESSIBILITY: return "Turn on Accessibility access";
             case WIFI:          return "Connect Wi-Fi";
             case DEVOPTS:       return "Enable Developer options";
             case WIRELESS_DEBUG:return "Turn on Wireless debugging";
@@ -112,7 +115,8 @@ public class MainActivity extends AppCompatActivity {
         switch (nextStep()) {
             case ACCESSIBILITY:
                 startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
-                setStatus("Switch \"Auto Tether\" ON in the Accessibility list, then come back.");
+                setStatus("In the list that opened, tap \"Auto Tether\" and switch it ON,\n" +
+                        "then come back. (This lets the app read the pairing code for you.)");
                 break;
             case WIFI:
                 startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS));
