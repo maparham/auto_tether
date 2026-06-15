@@ -7,6 +7,7 @@ import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -22,11 +23,21 @@ public class PairAccessibilityService extends AccessibilityService {
     private volatile boolean busy = false;
     private String lastKey = "";
 
+    /** When set (a future timestamp), auto-tap "Wireless debugging" in Developer options. */
+    public static volatile long navigateWdUntil = 0;
+    private int scrolls = 0;
+
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (busy) return;
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return;
+
+        // Requested navigation: tap "Wireless debugging" in the Developer-options list.
+        if (System.currentTimeMillis() < navigateWdUntil) {
+            if (tapWirelessDebugging(root)) { navigateWdUntil = 0; scrolls = 0; }
+        }
+
         StringBuilder sb = new StringBuilder();
         collect(root, sb);
         String all = sb.toString();
@@ -58,11 +69,18 @@ public class PairAccessibilityService extends AccessibilityService {
                 PairReceiver.show(getApplicationContext(), "Connected ✓ — done. Tethering will turn on by itself.");
                 Intent s = new Intent(getApplicationContext(), TetherService.class);
                 if (Build.VERSION.SDK_INT >= 26) startForegroundService(s); else startService(s);
+                // bring Auto Tether to the front (user is in the Wireless-debugging screen)
+                try {
+                    startActivity(new Intent(getApplicationContext(), MainActivity.class)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
+                } catch (Throwable ignore) {}
+                try { Thread.sleep(4000); } catch (InterruptedException ignore) {}
+                PairReceiver.cancel(getApplicationContext()); // pairing done — clear the notice
             } catch (Throwable t) {
                 PairReceiver.show(getApplicationContext(), "Error: " + t);
                 Log.e("AutoTether", "auto-pair failed", t);
             } finally {
-                try { Thread.sleep(4000); } catch (InterruptedException ignore) {}
+                try { Thread.sleep(1000); } catch (InterruptedException ignore) {}
                 lastKey = "";
                 busy = false;
             }
@@ -74,6 +92,32 @@ public class PairAccessibilityService extends AccessibilityService {
         if (node.getText() != null) sb.append(node.getText()).append('\n');
         if (node.getContentDescription() != null) sb.append(node.getContentDescription()).append('\n');
         for (int i = 0; i < node.getChildCount(); i++) collect(node.getChild(i), sb);
+    }
+
+    private boolean tapWirelessDebugging(AccessibilityNodeInfo root) {
+        List<AccessibilityNodeInfo> nodes = root.findAccessibilityNodeInfosByText("Wireless debugging");
+        if (nodes != null) {
+            for (AccessibilityNodeInfo n : nodes) {
+                AccessibilityNodeInfo c = n;
+                for (int i = 0; i < 6 && c != null && !c.isClickable(); i++) c = c.getParent();
+                if (c != null && c.isClickable()) { c.performAction(AccessibilityNodeInfo.ACTION_CLICK); return true; }
+            }
+        }
+        if (scrolls++ < 15) {
+            AccessibilityNodeInfo sc = findScrollable(root);
+            if (sc != null) sc.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+        } else { navigateWdUntil = 0; scrolls = 0; }
+        return false;
+    }
+
+    private AccessibilityNodeInfo findScrollable(AccessibilityNodeInfo node) {
+        if (node == null) return null;
+        if (node.isScrollable()) return node;
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo r = findScrollable(node.getChild(i));
+            if (r != null) return r;
+        }
+        return null;
     }
 
     @Override public void onInterrupt() {}
