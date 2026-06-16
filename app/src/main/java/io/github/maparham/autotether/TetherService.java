@@ -31,6 +31,7 @@ public class TetherService extends Service {
     final Map<String, Integer> presentCount = new HashMap<>();
     final Set<String> tethered = new HashSet<>();
     boolean usbTetherDone = false;
+    String lastUsbSig = "";
     String status = "watching for adapter…";
 
     @Override
@@ -73,10 +74,21 @@ public class TetherService extends Service {
                 presentCount.keySet().retainAll(now);
                 tethered.retainAll(now);
 
-                // USB tethering: phone plugged into a computer (peripheral). Fires even when the
-                // screen is locked (charge-only) — startTethering switches USB into data mode.
-                if (usbHostPresent()) {
+                // USB tethering: phone plugged into a computer (peripheral). Must fire even when the
+                // screen is locked (charge-only). We can't rely on USB "configured" (false while
+                // locked), so trigger on USB data-connected OR USB power present (both survive lock;
+                // host/Ethernet mode draws no USB power, so it won't false-fire there).
+                android.content.Intent ust = registerReceiver(null,
+                        new android.content.IntentFilter("android.hardware.usb.action.USB_STATE"));
+                boolean connd = ust != null && ust.getBooleanExtra("connected", false);
+                boolean confd = ust != null && ust.getBooleanExtra("configured", false);
+                boolean battUsb = isUsbPowered();
+                String sig = "conn=" + connd + " conf=" + confd + " battUSB=" + battUsb;
+                if (!sig.equals(lastUsbSig)) { Log.i("AutoTether", "USB signals " + sig); lastUsbSig = sig; }
+                boolean usbPresent = connd || battUsb;
+                if (usbPresent && now.isEmpty()) { // skip while an eth/usb tether iface is already up
                     if (!usbTetherDone) {
+                        Log.i("AutoTether", "USB host present (" + sig + ") → enabling USB tethering");
                         update("USB connected, enabling USB tethering…");
                         try {
                             String r = AdbRunner.usbTether(this);
@@ -107,20 +119,14 @@ public class TetherService extends Service {
         return s;
     }
 
-    /**
-     * True when the phone is plugged into a computer as a USB peripheral (vs. hosting the adapter
-     * or sitting on a dumb charger).
-     *
-     * We key on "connected" only, NOT "configured": a computer enumerates the phone so connected=true
-     * even while the screen is locked (charge-only, configured=false), whereas a dumb wall charger
-     * never enumerates (connected=false). startTethering(USB) then switches it into data mode — which
-     * works even while locked — so requiring "configured" here would wrongly skip the locked case.
-     */
-    boolean usbHostPresent() {
+    /** True when the phone is drawing power over USB (charging) — true even while locked, and
+     *  false in host/Ethernet mode (where the phone powers the adapter rather than being charged). */
+    boolean isUsbPowered() {
         try {
-            android.content.Intent i = registerReceiver(null,
-                new android.content.IntentFilter("android.hardware.usb.action.USB_STATE"));
-            return i != null && i.getBooleanExtra("connected", false);
+            android.content.Intent b = registerReceiver(null,
+                new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
+            int p = b == null ? 0 : b.getIntExtra("plugged", 0);
+            return (p & android.os.BatteryManager.BATTERY_PLUGGED_USB) != 0;
         } catch (Throwable t) { return false; }
     }
 

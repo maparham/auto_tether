@@ -36,7 +36,19 @@ public class MainActivity extends AppCompatActivity {
         });
 
         startWatcher(); // ensure the background watcher is running whenever the app is opened
+        requestBatteryExemption(); // keep the watcher alive through Doze, or it dies overnight
         refreshUi();
+    }
+
+    /** Ask to be exempt from battery optimization so the watcher isn't killed during long idle. */
+    void requestBatteryExemption() {
+        try {
+            android.os.PowerManager pm = getSystemService(android.os.PowerManager.class);
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        android.net.Uri.parse("package:" + getPackageName())));
+            }
+        } catch (Throwable ignore) {}
     }
 
     void refreshUi() {
