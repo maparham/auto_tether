@@ -30,14 +30,63 @@ public class MainActivity extends AppCompatActivity {
         status = findViewById(R.id.status);
 
         ((MaterialButton) findViewById(R.id.pairBtn)).setOnClickListener(v -> onPairButton());
-        ((MaterialButton) findViewById(R.id.watchBtn)).setOnClickListener(v -> {
+        MaterialButton watchBtn = findViewById(R.id.watchBtn);
+        watchBtn.setOnClickListener(v -> {
             startWatcher();
             status.setText("Background watcher (re)started.");
         });
+        // Long-press the watcher button to pick the adapter's interface manually at any time.
+        watchBtn.setOnLongClickListener(v -> { showInterfacePicker(); return true; });
 
         startWatcher(); // ensure the background watcher is running whenever the app is opened
         requestBatteryExemption(); // keep the watcher alive through Doze, or it dies overnight
         refreshUi();
+        handlePickIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handlePickIntent(intent);
+    }
+
+    /** Open the interface picker if we arrived from the "pick your adapter" notification. */
+    void handlePickIntent(Intent intent) {
+        if (intent != null && intent.getBooleanExtra("pick_interface", false)) showInterfacePicker();
+    }
+
+    /**
+     * Show a list of network interfaces so the user can pin which one is their adapter, for when
+     * auto-detection can't identify it. "Auto-detect" clears the override.
+     */
+    void showInterfacePicker() {
+        java.util.List<String[]> ifaces = TetherService.selectableInterfaces();
+        String current = getSharedPreferences("autotether", MODE_PRIVATE)
+                .getString(TetherService.KEY_IFACE, null);
+
+        java.util.List<String> labels = new java.util.ArrayList<>();
+        java.util.List<String> values = new java.util.ArrayList<>(); // null = auto-detect
+        labels.add("Auto-detect" + (current == null || current.isEmpty() ? "  ✓" : ""));
+        values.add(null);
+        for (String[] ni : ifaces) {
+            boolean sel = ni[0].equals(current);
+            labels.add(ni[0] + "   (" + ni[1] + ")" + (sel ? "  ✓" : ""));
+            values.add(ni[0]);
+        }
+
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Adapter network interface")
+                .setItems(labels.toArray(new String[0]), (d, which) -> {
+                    String chosen = values.get(which);
+                    TetherService.setInterfaceOverride(this, chosen);
+                    startWatcher(); // re-arm so the new choice takes effect immediately
+                    setStatus(chosen == null
+                            ? "Interface set to auto-detect."
+                            : "Adapter interface pinned to " + chosen + ".");
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     /** Ask to be exempt from battery optimization so the watcher isn't killed during long idle. */
@@ -193,6 +242,11 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         refreshUi();
+        // If the watcher couldn't identify an attached adapter, prompt the user to pick it.
+        if (getSharedPreferences("autotether", MODE_PRIVATE)
+                .getBoolean(TetherService.KEY_NEEDS_PICK, false)) {
+            showInterfacePicker();
+        }
     }
 
     /** Whether Wireless debugging is enabled. */

@@ -29,6 +29,12 @@ public class AdbRunner {
     // sets it; a reboot clears tcpip and (with the process restart) this flag.
     static volatile boolean tcpipArmed = false;
 
+    // Whether the helper dex has been confirmed present this process-life. The existence check is a
+    // shell round-trip that can stall on a freshly (re)opened loopback stream; once we've confirmed
+    // (or pushed) the dex, skip it so the time-critical tether call isn't delayed. Cleared on reboot
+    // (the dex lives in /data/local/tmp) along with the process and these statics.
+    static volatile boolean dexReady = false;
+
     /**
      * Get a connected manager, preferring the Wi-Fi-free loopback door and falling back to
      * Wireless Debugging. Throws AdbPairingRequiredException if never paired.
@@ -84,9 +90,11 @@ public class AdbRunner {
     /** Ensure connected and the helper dex is in place. */
     public static synchronized void ensureReady(Context ctx) throws Exception {
         AdbManager m = connect(ctx, 20000); // loopback (no Wi-Fi) → Wireless Debugging fallback
+        if (dexReady) return;
         if (!runCmd(m, "shell:[ -f " + DEX + " ] && echo yes || echo no").contains("yes")) {
             pushHelper(ctx, m);
         }
+        dexReady = true;
     }
 
     public static String tether(Context ctx) throws Exception {
@@ -104,13 +112,34 @@ public class AdbRunner {
     }
 
     static String runCmd(AdbManager m, String cmd) throws Exception {
-        try (AdbStream s = m.openStream(cmd)) {
+        return runCmd(m, cmd, 15000);
+    }
+
+    /**
+     * Run a shell command, but never block longer than {@code timeoutMs}. A dead/half-open self-adb
+     * stream can otherwise leave {@code in.read()} blocked forever — and since the watcher polls on a
+     * single thread, that one hang freezes adapter detection entirely (the "stuck at enabling…" bug).
+     * A watchdog force-closes the stream on overrun, which unblocks the read so we return promptly.
+     */
+    static String runCmd(AdbManager m, String cmd, long timeoutMs) throws Exception {
+        final AdbStream s = m.openStream(cmd);
+        Thread watchdog = new Thread(() -> {
+            try { Thread.sleep(timeoutMs); } catch (InterruptedException e) { return; }
+            Log.w("AutoTether", "runCmd timed out after " + timeoutMs + "ms, closing stream: " + cmd);
+            try { s.close(); } catch (Throwable ignore) {}
+        });
+        watchdog.setDaemon(true);
+        watchdog.start();
+        try {
             InputStream in = s.openInputStream();
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             byte[] buf = new byte[4096];
             int n;
             try { while ((n = in.read(buf)) > 0) bos.write(buf, 0, n); } catch (Exception ignore) {}
             return new String(bos.toByteArray(), "UTF-8").trim();
+        } finally {
+            watchdog.interrupt();
+            try { s.close(); } catch (Throwable ignore) {}
         }
     }
 
