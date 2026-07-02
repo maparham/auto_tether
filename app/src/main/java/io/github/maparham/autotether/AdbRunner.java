@@ -164,10 +164,23 @@ public class AdbRunner {
      * Run a shell command, but never block the calling thread longer than {@code timeoutMs}. The work
      * (openStream + read) runs on a daemon worker; the caller only join()s with a timeout. This is
      * crucial because the watcher polls on a single thread: a dead/half-open self-adb stream can hang
-     * in {@code openStream} OR {@code in.read()} forever, and either would freeze adapter detection
-     * entirely (the "stuck at enabling…" bug). On overrun we close the stream (best-effort — it may
-     * unblock a read; it can't unblock a wedged openStream) and abandon the worker, so the watcher
-     * always proceeds. A truly wedged worker is a leaked daemon, not a frozen watcher.
+     * in {@code in.read()} forever, which would freeze adapter detection entirely (the "stuck at
+     * enabling…" bug).
+     *
+     * On overrun we tear down the whole connection with {@code disconnect()} (not just this stream), so a
+     * timed-out command can't leave a half-dead connection for the next command to reuse: disconnect
+     * closes the socket — which unblocks a stalled read so the abandoned worker dies — and the next
+     * command reconnects fresh. adbd stays in tcpip mode (tcpipArmed unchanged), so that reconnect is a
+     * cheap loopback dial. We use disconnect(), NOT close(): close() also destroys the private key
+     * (terminal — would break the next TLS reconnect/pair), whereas disconnect() just drops the socket
+     * and leaves the manager reusable. The library multiplexes streams by id, so a lingering worker
+     * doesn't corrupt framing; the only real hazard is a stale connection, which the reconnect clears.
+     *
+     * Known limitation: if the hang is inside {@code openStream}/{@code AdbConnection.open} (adbd accepts
+     * the TCP connect but never ACKs the OPEN), the worker holds the library's connection lock, and
+     * disconnect() — like isConnected() and the next openStream — blocks on it until open() hits its own
+     * socket error. Nothing at this layer can pre-empt that; it's an adbd/library edge. The common case
+     * (a mid-stream read stall) does not hold that lock and recovers cleanly.
      */
     static String runCmd(AdbManager m, String cmd, long timeoutMs) throws Exception {
         final AdbStream[] holder = new AdbStream[1];
@@ -190,8 +203,8 @@ public class AdbRunner {
         worker.start();
         worker.join(timeoutMs);
         if (worker.isAlive()) {
-            Log.w("AutoTether", "runCmd timed out after " + timeoutMs + "ms, abandoning: " + cmd);
-            try { if (holder[0] != null) holder[0].close(); } catch (Throwable ignore) {}
+            Log.w("AutoTether", "runCmd timed out after " + timeoutMs + "ms, resetting connection: " + cmd);
+            try { m.disconnect(); } catch (Throwable ignore) {} // unblocks the worker and forces a fresh reconnect
             worker.interrupt();
             throw new Exception("runCmd timeout after " + timeoutMs + "ms: " + cmd);
         }

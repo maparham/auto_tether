@@ -127,6 +127,13 @@ public class TetherService extends Service {
         nt.start();
     }
 
+    // Refresh the wedged-loop heartbeat right before a potentially-slow adb call. Without this, a
+    // legitimately busy iteration (several bounded runCmds back-to-back — e.g. a USB stop→start reset)
+    // could exceed STALE_MS in honest work and the monitor would wrongly supersede it, racing two loops
+    // on the shared connection. With it, "wedged" means a single call blocked longer than STALE_MS,
+    // which comfortably exceeds any one bounded runCmd.
+    void heartbeat() { lastTick = android.os.SystemClock.elapsedRealtime(); }
+
     void loop() {
         Thread self = Thread.currentThread();
         while (loopThread == self) {
@@ -147,6 +154,7 @@ public class TetherService extends Service {
                         Log.i("AutoTether", "adapter stable: " + iface + " → tethering");
                         update("adapter " + iface + " connected, enabling…");
                         try {
+                            heartbeat();
                             String r = AdbRunner.tether(this);
                             update(r.contains("STARTED") ? "tethering ON (" + iface + ")" : "result: " + r);
                         } catch (Exception e) {
@@ -195,6 +203,7 @@ public class TetherService extends Service {
                             // (DUPLICATE_REQUEST) fires both for a live session AND for a wedged request that
                             // never brought the interface up. (Verified on a Pixel 8a: a second start of an
                             // active tether returns error=18 while ncm0 still holds its tether IP.)
+                            heartbeat();
                             String r = AdbRunner.usbTether(this);
                             boolean active = r.contains("STARTED") || usbTetherActive();
                             if (!active && r.contains("error=18") && !usbResetTried) {
@@ -204,6 +213,7 @@ public class TetherService extends Service {
                                 // AFTER the reset returns: if it throws (a runCmd timeout on the stop) the
                                 // attempt didn't happen, so retry next cycle instead of burning it.
                                 Log.i("AutoTether", "duplicate request, no active tether iface → stop then start to clear the wedge");
+                                heartbeat();
                                 r = AdbRunner.usbTetherReset(this);
                                 usbResetTried = true;
                                 active = r.contains("STARTED") || usbTetherActive();
