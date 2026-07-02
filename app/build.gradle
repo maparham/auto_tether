@@ -23,6 +23,10 @@ android {
     buildTypes {
         release {
             minifyEnabled false
+            // Personal app: sign the release with the standard Android debug key so it installs over
+            // the existing (debug-signed) build with no uninstall. A release build is not debuggable,
+            // so this still drops the "16 KB compatibility" warning dialog. Not a private/production key.
+            signingConfig signingConfigs.debug
         }
     }
 }
