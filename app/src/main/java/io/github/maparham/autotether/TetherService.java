@@ -48,6 +48,10 @@ public class TetherService extends Service {
     // still the designated thread (identity check), so designating a new one cleanly retires any old
     // or wedged thread. Cleared in onDestroy to stop the loop entirely.
     volatile Thread loopThread;
+    // A single daemon that periodically re-checks the loop's heartbeat and revives it if wedged. The
+    // heartbeat is otherwise only inspected on an external wake intent (onStartCommand); without this
+    // monitor a thread that hangs between wakes would stay hung indefinitely. One per process.
+    volatile Thread monitorThread;
     // elapsedRealtime of the loop's last iteration — a heartbeat used to detect a wedged loop.
     volatile long lastTick = 0;
     // If the loop hasn't ticked in this long, treat it as dead/wedged and start a fresh one. Must
@@ -71,6 +75,13 @@ public class TetherService extends Service {
     // (when Android cycles the interface into its bridge) doesn't open a window for USB to stomp it.
     volatile long ethCooldownUntil = 0;
     static final long ETH_COOLDOWN_MS = 25000;
+    // Throttle USB-tether (re)attempts so a not-yet-tethering state doesn't thrash startTethering /
+    // stop→start every poll.
+    long lastUsbAttemptMs = 0;
+    static final long USB_RETRY_MS = 8000;
+    // Whether we've already done one stop→start to clear a possible stale duplicate request this USB
+    // session. Bounds it to once, so we never repeatedly stop→start (which would disrupt a live tether).
+    boolean usbResetTried = false;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -79,7 +90,28 @@ public class TetherService extends Service {
         // if it died or wedged — the old static-`running` guard could never restart a hung watcher,
         // so an adapter attached after a hang was silently ignored.
         ensureLoopAlive();
+        ensureMonitorAlive();
         return START_STICKY;
+    }
+
+    // Keep one monitor daemon running. It outlives individual wake triggers and is the only thing that
+    // checks the loop heartbeat between them, so a wedged loop gets superseded even with no new intent.
+    synchronized void ensureMonitorAlive() {
+        Thread mt = monitorThread;
+        if (mt != null && mt.isAlive()) return;
+        Thread nt = new Thread(this::monitor);
+        nt.setDaemon(true);
+        monitorThread = nt;
+        nt.start();
+    }
+
+    void monitor() {
+        Thread self = Thread.currentThread();
+        while (monitorThread == self) {
+            // Check well within STALE_MS so a wedge is caught promptly, not a full window later.
+            try { Thread.sleep(STALE_MS / 2); } catch (InterruptedException e) { break; }
+            try { ensureLoopAlive(); } catch (Throwable t) { Log.e("AutoTether", "monitor error", t); }
+        }
     }
 
     synchronized void ensureLoopAlive() {
@@ -148,18 +180,46 @@ public class TetherService extends Service {
                 boolean ethActive = android.os.SystemClock.elapsedRealtime() < ethCooldownUntil;
                 boolean adapterAttached = usbHostDevicePresent();
                 if (usbPresent && now.isEmpty() && !ethActive && !adapterAttached) {
-                    if (!usbTetherDone) {
+                    long nowMs = android.os.SystemClock.elapsedRealtime();
+                    // Latch ON only when tethering is genuinely running — a STARTED callback OR a live
+                    // gadget interface (see usbTetherActive). error=18 (DUPLICATE_REQUEST) alone is not
+                    // trustworthy: it fires both for a real active session and for a wedged request that
+                    // brought nothing up. Blindly trusting it showed "ON" while doing nothing.
+                    if (!usbTetherDone && (nowMs - lastUsbAttemptMs >= USB_RETRY_MS || lastUsbAttemptMs == 0)) {
+                        lastUsbAttemptMs = nowMs;
                         Log.i("AutoTether", "USB host present (" + sig + ") → enabling USB tethering");
                         update("USB connected, enabling USB tethering…");
                         try {
+                            // Ground truth for "USB is really tethering" is the gadget interface being up
+                            // with a routable IP (usbTetherActive), NOT the start return code alone. error=18
+                            // (DUPLICATE_REQUEST) fires both for a live session AND for a wedged request that
+                            // never brought the interface up. (Verified on a Pixel 8a: a second start of an
+                            // active tether returns error=18 while ncm0 still holds its tether IP.)
                             String r = AdbRunner.usbTether(this);
-                            // STARTED = we enabled it; error=18 (DUPLICATE_REQUEST) = already on.
-                            if (r.contains("STARTED") || r.contains("error=18")) { usbTetherDone = true; update("USB tethering ON"); }
-                            else update("USB result: " + r);
+                            boolean active = r.contains("STARTED") || usbTetherActive();
+                            if (!active && r.contains("error=18") && !usbResetTried) {
+                                // Duplicate request but NO live tether interface → a genuinely stale/wedged
+                                // request. Clear it once with stop→start. We do NOT reset when the interface
+                                // is already up — that would tear down a working tether. Latch usbResetTried
+                                // AFTER the reset returns: if it throws (a runCmd timeout on the stop) the
+                                // attempt didn't happen, so retry next cycle instead of burning it.
+                                Log.i("AutoTether", "duplicate request, no active tether iface → stop then start to clear the wedge");
+                                r = AdbRunner.usbTetherReset(this);
+                                usbResetTried = true;
+                                active = r.contains("STARTED") || usbTetherActive();
+                            }
+                            if (active) { usbTetherDone = true; update("USB tethering ON"); }
+                            else update("USB tethering pending…"); // retry on the next throttled cycle
                         } catch (Exception e) { update("USB error: " + e); Log.e("AutoTether", "usb tether failed", e); }
+                    } else if (usbTetherDone && !"USB tethering ON".equals(status)) {
+                        // Restore the label only if something else changed it — re-posting the same
+                        // text every poll just churns the notification for the whole USB session.
+                        update("USB tethering ON");
                     }
                 } else {
                     usbTetherDone = false;
+                    usbResetTried = false;
+                    lastUsbAttemptMs = 0;
                 }
 
                 // Auto-detection failure: a USB host device is attached (we're the host, not a
@@ -184,7 +244,7 @@ public class TetherService extends Service {
                     }
                 }
 
-                if (now.isEmpty() && !usbTetherDone && !pickPrompted) update("watching for adapter…");
+                if (now.isEmpty() && !usbTetherDone && !pickPrompted && !usbPresent) update("watching for adapter…");
             } catch (Throwable t) {
                 Log.e("AutoTether", "loop error", t);
             }
@@ -241,6 +301,30 @@ public class TetherService extends Service {
             UsbManager um = getSystemService(UsbManager.class);
             return um != null && !um.getDeviceList().isEmpty();
         } catch (Throwable t) { return false; }
+    }
+
+    /** True when the phone's own USB-tether gadget interface (ncm/rndis/usb) is up and holds a
+     *  routable IPv4 — the ground-truth signal that USB tethering is actually running, which
+     *  startTethering's return code can't give us (error=18 means "already requested", not "up").
+     *  Verified on a Pixel 8a: ncm0 carries a 10.x tether address while tethered and loses it when
+     *  tethering stops. */
+    boolean usbTetherActive() {
+        try {
+            Enumeration<NetworkInterface> e = NetworkInterface.getNetworkInterfaces();
+            while (e != null && e.hasMoreElements()) {
+                NetworkInterface ni = e.nextElement();
+                String n = ni.getName();
+                if (!(n.startsWith("ncm") || n.startsWith("rndis") || n.startsWith("usb"))) continue;
+                if (!ni.isUp()) continue;
+                Enumeration<java.net.InetAddress> addrs = ni.getInetAddresses();
+                while (addrs.hasMoreElements()) {
+                    java.net.InetAddress a = addrs.nextElement();
+                    if (a instanceof java.net.Inet4Address && !a.isLoopbackAddress() && !a.isLinkLocalAddress())
+                        return true;
+                }
+            }
+        } catch (Throwable t) { /* treat as not-active */ }
+        return false;
     }
 
     /**
@@ -329,7 +413,7 @@ public class TetherService extends Service {
 
     Notification buildNotification(String text) {
         NotificationManager nm = getSystemService(NotificationManager.class);
-        if (nm.getNotificationChannel(CH) == null) {
+        if (nm != null && nm.getNotificationChannel(CH) == null) {
             nm.createNotificationChannel(new NotificationChannel(CH, "Auto Tether", NotificationManager.IMPORTANCE_LOW));
         }
         return new Notification.Builder(this, CH)
@@ -341,5 +425,5 @@ public class TetherService extends Service {
     }
 
     @Override public IBinder onBind(Intent i) { return null; }
-    @Override public void onDestroy() { loopThread = null; super.onDestroy(); }
+    @Override public void onDestroy() { loopThread = null; monitorThread = null; super.onDestroy(); }
 }

@@ -23,6 +23,7 @@ public class AdbRunner {
     static final String DEX = "/data/local/tmp/tether.dex";
     static final String TETHER_CMD = "shell:CLASSPATH=" + DEX + " app_process /system/bin Main 5 start";
     static final String USB_CMD = "shell:CLASSPATH=" + DEX + " app_process /system/bin Main 1 start";
+    static final String USB_STOP_CMD = "shell:CLASSPATH=" + DEX + " app_process /system/bin Main 1 stop";
     static final int LOCAL_PORT = 5555;
 
     // Whether adbd is currently in tcpip mode this boot. Self-healing: a successful loopback connect
@@ -61,6 +62,10 @@ public class AdbRunner {
      * connects work with Wi-Fi off. This restarts adbd, dropping the current connection — callers
      * run it only while idle, never mid-command. No-op if already armed.
      */
+    // SECURITY NOTE: adbd's `tcpip:` service always binds 0.0.0.0 — there is no loopback-only mode
+    // without root. Enabling the Wi-Fi-free loopback door therefore also exposes adb on 5555 to every
+    // interface (incl. the local network). adb's key-based auth still gates new hosts, but any
+    // already-authorized key reaches a full shell; avoid arming this on untrusted networks.
     static void armTcpip(AdbManager m) {
         if (tcpipArmed) return;
         try {
@@ -91,10 +96,28 @@ public class AdbRunner {
     public static synchronized void ensureReady(Context ctx) throws Exception {
         AdbManager m = connect(ctx, 20000); // loopback (no Wi-Fi) → Wireless Debugging fallback
         if (dexReady) return;
-        if (!runCmd(m, "shell:[ -f " + DEX + " ] && echo yes || echo no").contains("yes")) {
-            pushHelper(ctx, m);
+        byte[] dex = readAsset(ctx);
+        // Confirm the dex is present AND complete before latching dexReady — a `[ -f ]` existence
+        // check passes for a half-written file, and `app_process` would then load a truncated dex
+        // and fail forever (dexReady stays true, so we'd never re-push). Compare byte size instead.
+        if (remoteSize(m) != dex.length) {
+            pushHelper(m, dex);
+            int after = remoteSize(m);
+            // Throw only on a *definite* wrong size (a truncated push). remoteSize returns -1 when it
+            // couldn't read the size at all — a transient stream stall, not a short file (`wc -c` on any
+            // existing file yields its byte count). Treating -1 as failure here would spuriously report
+            // "incomplete" and re-push the whole dex every poll on a slow loopback stream, and never
+            // latch dexReady. pushHelper already throws if the stream write itself failed, so trust it.
+            if (after >= 0 && after != dex.length)
+                throw new Exception("helper dex push incomplete (remote size " + after + " != " + dex.length + ")");
         }
         dexReady = true;
+    }
+
+    /** Size of the on-device dex in bytes, or -1 if absent/unreadable. */
+    static int remoteSize(AdbManager m) throws Exception {
+        String out = runCmd(m, "shell:wc -c < " + DEX + " 2>/dev/null").trim();
+        try { return Integer.parseInt(out); } catch (NumberFormatException e) { return -1; }
     }
 
     public static String tether(Context ctx) throws Exception {
@@ -111,47 +134,83 @@ public class AdbRunner {
         return r;
     }
 
+    /** Clear a wedged USB-tether request (startTethering returning DUPLICATE_REQUEST with nothing
+     *  actually tethering) by stopping then starting again, so the framework re-issues it fresh. */
+    public static String usbTetherReset(Context ctx) throws Exception {
+        ensureReady(ctx);
+        AdbManager m = AdbManager.getInstance(ctx);
+        runCmd(m, USB_STOP_CMD);
+        try { Thread.sleep(800); } catch (InterruptedException ignore) {}
+        String r = runCmd(m, USB_CMD);
+        Log.i("AutoTether", "usb tether reset (stop→start) result: " + r);
+        return r;
+    }
+
+    /**
+     * Pair to a Wireless-debugging endpoint, serialized against every other connection user via this
+     * class's lock. The accessibility service pairs on its own thread while the watcher loop runs
+     * {@link #maintainConnection} concurrently; both touch the one AdbManager singleton, and pairing
+     * outside this lock can corrupt the shared connection state.
+     */
+    public static synchronized boolean pair(Context ctx, String host, int port, String code) throws Exception {
+        return AdbManager.getInstance(ctx).pair(host, port, code);
+    }
+
     static String runCmd(AdbManager m, String cmd) throws Exception {
         return runCmd(m, cmd, 15000);
     }
 
     /**
-     * Run a shell command, but never block longer than {@code timeoutMs}. A dead/half-open self-adb
-     * stream can otherwise leave {@code in.read()} blocked forever — and since the watcher polls on a
-     * single thread, that one hang freezes adapter detection entirely (the "stuck at enabling…" bug).
-     * A watchdog force-closes the stream on overrun, which unblocks the read so we return promptly.
+     * Run a shell command, but never block the calling thread longer than {@code timeoutMs}. The work
+     * (openStream + read) runs on a daemon worker; the caller only join()s with a timeout. This is
+     * crucial because the watcher polls on a single thread: a dead/half-open self-adb stream can hang
+     * in {@code openStream} OR {@code in.read()} forever, and either would freeze adapter detection
+     * entirely (the "stuck at enabling…" bug). On overrun we close the stream (best-effort — it may
+     * unblock a read; it can't unblock a wedged openStream) and abandon the worker, so the watcher
+     * always proceeds. A truly wedged worker is a leaked daemon, not a frozen watcher.
      */
     static String runCmd(AdbManager m, String cmd, long timeoutMs) throws Exception {
-        final AdbStream s = m.openStream(cmd);
-        Thread watchdog = new Thread(() -> {
-            try { Thread.sleep(timeoutMs); } catch (InterruptedException e) { return; }
-            Log.w("AutoTether", "runCmd timed out after " + timeoutMs + "ms, closing stream: " + cmd);
-            try { s.close(); } catch (Throwable ignore) {}
+        final AdbStream[] holder = new AdbStream[1];
+        final String[] result = new String[1];
+        final Throwable[] err = new Throwable[1];
+        Thread worker = new Thread(() -> {
+            try {
+                AdbStream s = m.openStream(cmd);
+                holder[0] = s;
+                InputStream in = s.openInputStream();
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[4096];
+                int n;
+                try { while ((n = in.read(buf)) > 0) bos.write(buf, 0, n); } catch (Exception ignore) {}
+                result[0] = new String(bos.toByteArray(), "UTF-8").trim();
+            } catch (Throwable t) { err[0] = t; }
+            finally { try { if (holder[0] != null) holder[0].close(); } catch (Throwable ignore) {} }
         });
-        watchdog.setDaemon(true);
-        watchdog.start();
-        try {
-            InputStream in = s.openInputStream();
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            byte[] buf = new byte[4096];
-            int n;
-            try { while ((n = in.read(buf)) > 0) bos.write(buf, 0, n); } catch (Exception ignore) {}
-            return new String(bos.toByteArray(), "UTF-8").trim();
-        } finally {
-            watchdog.interrupt();
-            try { s.close(); } catch (Throwable ignore) {}
+        worker.setDaemon(true);
+        worker.start();
+        worker.join(timeoutMs);
+        if (worker.isAlive()) {
+            Log.w("AutoTether", "runCmd timed out after " + timeoutMs + "ms, abandoning: " + cmd);
+            try { if (holder[0] != null) holder[0].close(); } catch (Throwable ignore) {}
+            worker.interrupt();
+            throw new Exception("runCmd timeout after " + timeoutMs + "ms: " + cmd);
         }
+        if (err[0] != null) throw new Exception("runCmd failed: " + cmd, err[0]);
+        return result[0] != null ? result[0] : "";
     }
 
-    static void pushHelper(Context ctx, AdbManager m) throws Exception {
-        byte[] dex;
+    /** Read the bundled helper dex from app assets into memory. */
+    static byte[] readAsset(Context ctx) throws Exception {
         try (InputStream is = ctx.getAssets().open("tether.dex")) {
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             byte[] buf = new byte[8192];
             int n;
             while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
-            dex = bos.toByteArray();
+            return bos.toByteArray();
         }
+    }
+
+    static void pushHelper(AdbManager m, byte[] dex) throws Exception {
         String b64 = Base64.encodeToString(dex, Base64.NO_WRAP);
         try (AdbStream s = m.openStream("shell:base64 -d > " + DEX)) {
             OutputStream out = s.openOutputStream();

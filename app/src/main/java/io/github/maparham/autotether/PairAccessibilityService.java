@@ -62,7 +62,7 @@ public class PairAccessibilityService extends AccessibilityService {
         new Thread(() -> {
             try {
                 Log.i("AutoTether", "auto-pair to " + host + ":" + port);
-                boolean ok = AdbManager.getInstance(getApplicationContext()).pair(host, port, code);
+                boolean ok = AdbRunner.pair(getApplicationContext(), host, port, code);
                 if (!ok) { PairReceiver.show(getApplicationContext(), "Pairing failed — reopen the pair dialog."); return; }
                 PairReceiver.show(getApplicationContext(), "Paired ✓ connecting…");
                 AdbRunner.ensureReady(getApplicationContext());
