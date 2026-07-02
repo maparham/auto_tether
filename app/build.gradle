@@ -20,6 +20,12 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
+    // Don't run lintVital on release builds: it pulls lint-gradle at build time, which fails an
+    // offline `assembleRelease`, and this personal app doesn't gate releases on lint.
+    lint {
+        checkReleaseBuilds false
+    }
+
     buildTypes {
         release {
             minifyEnabled false
