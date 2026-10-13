@@ -125,10 +125,13 @@ let internalIfacePrefixes = ["lo", "wlan", "p2p", "aware", "nan",
                              "dummy", "sit", "gre", "tunl", "tun",
                              "ip6", "ip_vti", "erspan", "ifb", "radiotap", "bond"]
 
-func isTetheringOn(adb: String, kind: TetherKind) -> Bool {
+/// Interface names currently in TetheredState (strict "<iface> - TetheredState"
+/// lines only — skips dumpsys event-log lines). Single adb round-trip.
+func fetchTetheredIfaces(adb: String) -> [String] {
     // Filter on-device: full `dumpsys tethering` is ~180KB (would block the
     // capture pipe), the grep reduces it to a few lines.
     let (_, out) = runCmd(adb, ["shell", "dumpsys tethering | grep TetheredState"], timeout: 15)
+    var ifaces: [String] = []
     for line in out.split(separator: "\n") {
         let t = line.trimmingCharacters(in: .whitespaces)
         // Strict state-line shape: "<iface> - TetheredState …". This skips the
@@ -136,18 +139,25 @@ func isTetheringOn(adb: String, kind: TetherKind) -> Bool {
         // leading field is a timestamp, not an interface name.
         let tok = t.split(separator: " ")
         guard tok.count >= 3 && tok[1] == "-" && tok[2].hasPrefix("TetheredState") else { continue }
-        let iface = String(tok[0])
-        switch kind {
-        case .usb:
-            // The phone's USB-tether gadget (ncm/rndis/usb).
-            if iface.hasPrefix("ncm") || iface.hasPrefix("rndis") || iface.hasPrefix("usb") { return true }
-        case .lan:
-            // Any tethered interface that isn't Wi-Fi/cellular/USB-gadget —
-            // i.e. the attached Ethernet adapter (eth0/usb0/enx…).
-            if !iface.isEmpty && !internalIfacePrefixes.contains(where: { iface.hasPrefix($0) }) { return true }
-        }
+        ifaces.append(String(tok[0]))
     }
-    return false
+    return ifaces
+}
+
+func kindMatches(iface: String, kind: TetherKind) -> Bool {
+    switch kind {
+    case .usb:
+        // The phone's USB-tether gadget (ncm/rndis/usb).
+        return iface.hasPrefix("ncm") || iface.hasPrefix("rndis") || iface.hasPrefix("usb")
+    case .lan:
+        // Any tethered interface that isn't Wi-Fi/cellular/USB-gadget —
+        // i.e. the attached Ethernet adapter (eth0/usb0/enx…).
+        return !iface.isEmpty && !internalIfacePrefixes.contains(where: { iface.hasPrefix($0) })
+    }
+}
+
+func isTetheringOn(adb: String, kind: TetherKind) -> Bool {
+    return fetchTetheredIfaces(adb: adb).contains(where: { kindMatches(iface: $0, kind: kind) })
 }
 
 enum TetherError: Error {
@@ -186,6 +196,15 @@ func setTethering(_ kind: TetherKind, on: Bool) throws -> String {
 // MARK: - CLI mode (also used for testing)
 
 func runCLI(_ args: [String]) -> Int32 {
+    if args.contains("--print-states") {
+        guard let adb = findAdb() else { print("usb=unknown lan=unknown (no adb)"); return 1 }
+        guard waitForDevice(adb: adb, timeout: 10) else { print("usb=unknown lan=unknown (no device)"); return 1 }
+        let ifaces = fetchTetheredIfaces(adb: adb)
+        let usb = ifaces.contains(where: { kindMatches(iface: $0, kind: .usb) })
+        let lan = ifaces.contains(where: { kindMatches(iface: $0, kind: .lan) })
+        print("usb=\(usb ? "on" : "off") lan=\(lan ? "on" : "off")")
+        return 0
+    }
     let kind: TetherKind?
     let on: Bool?
     if args.contains("--on") { kind = .usb; on = true }
@@ -193,7 +212,7 @@ func runCLI(_ args: [String]) -> Int32 {
     else if args.contains("--lan-on") { kind = .lan; on = true }
     else if args.contains("--lan-off") { kind = .lan; on = false }
     else {
-        print("Usage: MacTether --on | --off | --lan-on | --lan-off")
+        print("Usage: MacTether --on | --off | --lan-on | --lan-off | --print-states")
         return 2
     }
     do {
@@ -309,6 +328,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setBusy(true, note: on ? "Turning \(kind.label) tethering on…" : "Turning \(kind.label) tethering off…")
         DispatchQueue.global().async {
             defer { self.endOp() }
+            defer { self.refreshMenuStates() }
             do {
                 let msg = try setTethering(kind, on: on)
                 self.setBusy(false, note: msg)
@@ -363,12 +383,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             var lastSeen = self.phonePresent()
             self.watchLog("watcher started (present=\(lastSeen))")
+            var lastStateCheck = Date.distantPast
+            if lastSeen { self.refreshMenuStates() }
             while true {
                 Thread.sleep(forTimeInterval: 3)
                 let seen = self.phonePresent()
-                if seen != lastSeen { self.watchLog("presence \(lastSeen) → \(seen)") }
+                if seen != lastSeen {
+                    self.watchLog("presence \(lastSeen) → \(seen)")
+                    if !seen {
+                        // Phone gone: state unknown — dash all toggles.
+                        DispatchQueue.main.async {
+                            for item in [self.usbOnItem, self.usbOffItem, self.lanOnItem, self.lanOffItem] as [NSMenuItem] {
+                                item.state = .mixed
+                            }
+                            self.statusLine.title = "Phone not connected."
+                        }
+                    }
+                }
                 if seen && !lastSeen && self.autoEnabled { self.runAutoEnable() }
                 lastSeen = seen
+                // Refresh checkmarks from the phone's actual state (cheap single
+                // query, at most every 10s).
+                if seen && Date().timeIntervalSince(lastStateCheck) >= 10 {
+                    lastStateCheck = Date()
+                    self.refreshMenuStates()
+                }
+            }
+        }
+    }
+
+    /// Reads the phone's tether state and checkmarks the matching menu items
+    /// (radio-style: exactly one of each On/Off pair is checked).
+    func refreshMenuStates() {
+        DispatchQueue.global().async {
+            guard let adb = findAdb(), self.phonePresent() else { return }
+            let ifaces = fetchTetheredIfaces(adb: adb)
+            let usb = ifaces.contains(where: { kindMatches(iface: $0, kind: .usb) })
+            let lan = ifaces.contains(where: { kindMatches(iface: $0, kind: .lan) })
+            DispatchQueue.main.async {
+                self.usbOnItem.state = usb ? .on : .off
+                self.usbOffItem.state = usb ? .off : .on
+                self.lanOnItem.state = lan ? .on : .off
+                self.lanOffItem.state = lan ? .off : .on
             }
         }
     }
@@ -379,6 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setBusy(true, note: "Phone reconnected — enabling USB tethering…")
         DispatchQueue.global().async {
             defer { self.endOp() }
+            defer { self.refreshMenuStates() }
             do {
                 let msg = try setTethering(.usb, on: true)
                 self.watchLog("auto-enable result: \(msg)")
@@ -397,7 +454,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Entry
 
 let cliArgs = CommandLine.arguments
-if cliArgs.contains("--on") || cliArgs.contains("--off") || cliArgs.contains("--lan-on") || cliArgs.contains("--lan-off") || cliArgs.contains("--help") || cliArgs.contains("-h") {
+if cliArgs.contains("--on") || cliArgs.contains("--off") || cliArgs.contains("--lan-on") || cliArgs.contains("--lan-off") || cliArgs.contains("--print-states") || cliArgs.contains("--help") || cliArgs.contains("-h") {
     exit(runCLI(cliArgs))
 }
 let app = NSApplication.shared
