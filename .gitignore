@@ -3,6 +3,7 @@ out/
 *.class
 *.dex
 *.apk
+MacTether/MacTether.app/
 
 # signing key — generated locally by build.sh, never commit
 *.keystore
