@@ -12,14 +12,16 @@ open MacTether.app
 
 Menu:
 
-- **Turn USB Tethering On / Off** — phone shares its connection with this Mac.
-- **Turn LAN Tethering On / Off** — phone shares via a USB-Ethernet adapter.
-- **Turn Hotspot On / Off** — Wi-Fi hotspot (tethering type 0 via the helper;
+- **USB Tethering** — phone shares its connection with this Mac.
+- **LAN Tethering** — phone shares via a USB-Ethernet adapter.
+- **Hotspot** — Wi-Fi hotspot (tethering type 0 via the helper;
   detected as the SoftAP interface `wlan1`/`ap0`/`swlan0` in TetheredState).
-- **Turn Wi-Fi On / Off** — the phone's own Wi-Fi, via `svc wifi` (no helper
+- **Wi-Fi** — the phone's own Wi-Fi, via `svc wifi` (no helper
   needed; state read from `settings get global wifi_on`).
-  Checkmarks track the phone's actual state (refreshed every 10s and after
-  every action; dashed while the phone is unreachable).
+
+Each is a single toggle: the checkmark shows the phone's actual state
+(refreshed every 10s and after every action; dashed while the phone is
+unreachable) and clicking flips it.
 - **Auto-enable USB on reconnect** (on by default) — when the phone
   reappears over adb, USB tethering is turned on automatically. Only fires
   on absent→present transitions: nothing happens at launch if the phone is
