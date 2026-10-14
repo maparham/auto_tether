@@ -14,6 +14,10 @@ Menu:
 
 - **Turn USB Tethering On / Off** — phone shares its connection with this Mac.
 - **Turn LAN Tethering On / Off** — phone shares via a USB-Ethernet adapter.
+- **Turn Hotspot On / Off** — Wi-Fi hotspot (tethering type 0 via the helper;
+  detected as the SoftAP interface `wlan1`/`ap0`/`swlan0` in TetheredState).
+- **Turn Wi-Fi On / Off** — the phone's own Wi-Fi, via `svc wifi` (no helper
+  needed; state read from `settings get global wifi_on`).
   Checkmarks track the phone's actual state (refreshed every 10s and after
   every action; dashed while the phone is unreachable).
 - **Auto-enable USB on reconnect** (on by default) — when the phone
@@ -30,7 +34,7 @@ Uses the `adb` on your PATH (`brew install android-platform-tools` if missing).
 - LAN tethering needs the adapter on the phone's USB port, so over USB adb
   it requires a hub (or Wi-Fi adb); otherwise the phone is unreachable.
 - No Wireless-debugging pairing is ever required from this app.
-- Headless use: `MacTether.app/Contents/MacOS/MacTether --on | --off | --lan-on | --lan-off` (`--print-states` prints `usb=on|off lan=on|off` for debugging).
+- Headless use: `MacTether.app/Contents/MacOS/MacTether --on | --off | --lan-on | --lan-off | --hotspot-on | --hotspot-off | --wifi-on | --wifi-off` (`--print-states` prints `usb=… lan=… hotspot=… wifi=…` for debugging).
 - The helper dex is resolved at build time (`res/` → app assets → helper
   build) and bundled; it is pushed to the phone if missing.
 - Watcher activity is logged to `~/Library/Caches/mactether-watch.log`.

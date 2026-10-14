@@ -5,20 +5,33 @@ import Foundation
 
 let dexRemotePath = "/data/local/tmp/tether.dex"
 
-enum TetherKind {
-    case usb   // phone shares its connection with this computer (type 1)
-    case lan   // phone shares via a USB-Ethernet adapter (type 5)
+enum ToggleKind {
+    case usb      // phone shares its connection with this computer (type 1)
+    case lan      // phone shares via a USB-Ethernet adapter (type 5)
+    case hotspot  // Wi-Fi hotspot (type 0)
+    case wifi     // the phone's own Wi-Fi (svc wifi — not tethering)
 
-    var helperType: String {
+    var helperType: String? {
         switch self {
-        case .usb: return "1" // TetheringManager.TETHERING_USB
-        case .lan: return "5" // TetheringManager.TETHERING_ETHERNET
+        case .usb: return "1"     // TetheringManager.TETHERING_USB
+        case .lan: return "5"     // TetheringManager.TETHERING_ETHERNET
+        case .hotspot: return "0" // TetheringManager.TETHERING_WIFI
+        case .wifi: return nil
         }
     }
     var label: String {
         switch self {
         case .usb: return "USB"
         case .lan: return "LAN"
+        case .hotspot: return "Hotspot"
+        case .wifi: return "Wi-Fi"
+        }
+    }
+    /// "USB tethering" / "Wi-Fi" — for status and alert messages.
+    var noun: String {
+        switch self {
+        case .wifi: return "Wi-Fi"
+        default: return "\(label) tethering"
         }
     }
 }
@@ -104,13 +117,13 @@ func ensureHelperOnDevice(adb: String) -> String? {
     return nil
 }
 
-// Poll dumpsys until the tether state matches, tolerating the gap where adb
-// drops out (USB reconfigures ~3-5s after a USB start/stop command).
-func pollTetherState(adb: String, kind: TetherKind, wantOn: Bool, timeout: TimeInterval = 25) -> Bool {
+// Poll until the state matches, tolerating the gap where adb drops out (USB
+// reconfigures ~3-5s after a USB start/stop command).
+func pollState(adb: String, kind: ToggleKind, wantOn: Bool, timeout: TimeInterval = 25) -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
         if waitForDevice(adb: adb, timeout: 6) {
-            if isTetheringOn(adb: adb, kind: kind) == wantOn { return true }
+            if currentState(adb: adb, kind: kind) == wantOn { return true }
         }
         Thread.sleep(forTimeInterval: 2)
     }
@@ -118,9 +131,10 @@ func pollTetherState(adb: String, kind: TetherKind, wantOn: Bool, timeout: TimeI
 }
 
 // Interface prefixes that are never the Ethernet adapter: loopback, Wi-Fi /
-// Wi-Fi-direct, cellular, tunnels, and the phone's OWN usb-tether gadget
-// (ncm/rndis). Mirrors TetherService on the phone.
+// Wi-Fi-direct / SoftAP, cellular, tunnels, and the phone's OWN usb-tether
+// gadget (ncm/rndis). Mirrors TetherService on the phone.
 let internalIfacePrefixes = ["lo", "wlan", "p2p", "aware", "nan",
+                             "ap", "swlan", "softap",
                              "rmnet", "ccmni", "umts", "ncm", "rndis",
                              "dummy", "sit", "gre", "tunl", "tun",
                              "ip6", "ip_vti", "erspan", "ifb", "radiotap", "bond"]
@@ -144,7 +158,7 @@ func fetchTetheredIfaces(adb: String) -> [String] {
     return ifaces
 }
 
-func kindMatches(iface: String, kind: TetherKind) -> Bool {
+func kindMatches(iface: String, kind: ToggleKind) -> Bool {
     switch kind {
     case .usb:
         // The phone's USB-tether gadget (ncm/rndis/usb).
@@ -153,43 +167,79 @@ func kindMatches(iface: String, kind: TetherKind) -> Bool {
         // Any tethered interface that isn't Wi-Fi/cellular/USB-gadget —
         // i.e. the attached Ethernet adapter (eth0/usb0/enx…).
         return !iface.isEmpty && !internalIfacePrefixes.contains(where: { iface.hasPrefix($0) })
+    case .hotspot:
+        // SoftAP interface: wlan1 (Pixel), ap0 (Qualcomm), swlan0 (Samsung).
+        return iface.hasPrefix("wlan") || iface.hasPrefix("ap") || iface.hasPrefix("swlan") || iface.hasPrefix("softap")
+    case .wifi:
+        return false // Wi-Fi STA is not a tethered interface — see isWifiOn.
     }
 }
 
-func isTetheringOn(adb: String, kind: TetherKind) -> Bool {
+func isTetheringOn(adb: String, kind: ToggleKind) -> Bool {
     return fetchTetheredIfaces(adb: adb).contains(where: { kindMatches(iface: $0, kind: kind) })
+}
+
+/// Wi-Fi STA state from Settings.Global (0=off, 1=on, 2=on-in-airplane-mode).
+func isWifiOn(adb: String) -> Bool {
+    let (_, out) = runCmd(adb, ["shell", "settings", "get", "global", "wifi_on"], timeout: 10)
+    let v = out.trimmingCharacters(in: .whitespacesAndNewlines)
+    return v == "1" || v == "2"
+}
+
+/// Ground-truth state for any toggle kind.
+func currentState(adb: String, kind: ToggleKind) -> Bool {
+    switch kind {
+    case .wifi: return isWifiOn(adb: adb)
+    default: return isTetheringOn(adb: adb, kind: kind)
+    }
 }
 
 enum TetherError: Error {
     case message(String)
 }
 
-// Runs the helper and verifies via dumpsys, tolerating the expected quirk:
-// enabling USB tethering reconfigures USB and drops its own adb connection
-// (exit 255, no STARTED line) even on success — so ground truth is dumpsys.
+// Runs the helper (or `svc wifi`) and verifies the resulting state, tolerating
+// the expected quirk: enabling USB tethering reconfigures USB and drops its own
+// adb connection (exit 255, no STARTED line) even on success — so ground truth
+// is the polled state, not the command output.
 //
 // Note: LAN tethering needs the adapter on the phone's USB port, so over USB
 // adb this requires a hub (or Wi-Fi adb); otherwise the phone is unreachable
 // and this throws.
-func setTethering(_ kind: TetherKind, on: Bool) throws -> String {
+func setTethering(_ kind: ToggleKind, on: Bool) throws -> String {
     guard let adb = findAdb() else {
         throw TetherError.message("adb not found. Install Android platform-tools (brew install android-platform-tools).")
     }
     guard waitForDevice(adb: adb) else {
         throw TetherError.message("No phone found over adb. Plug it in via USB with USB debugging enabled.")
     }
+
+    if kind == .wifi {
+        // svc wifi runs as shell (uid 2000) — no helper dex needed.
+        let (_, out) = runCmd(adb, ["shell", "svc", "wifi", on ? "enable" : "disable"], timeout: 15)
+        if out.localizedCaseInsensitiveContains("exception") || out.localizedCaseInsensitiveContains("error") {
+            throw TetherError.message("svc wifi failed: \(out)")
+        }
+        if pollState(adb: adb, kind: .wifi, wantOn: on, timeout: 15) {
+            return on ? "Wi-Fi is ON." : "Wi-Fi is OFF."
+        }
+        throw TetherError.message(on
+            ? "Could not confirm Wi-Fi turned on. Unlock the phone and try again."
+            : "Wi-Fi still shows as on. Try again.")
+    }
+
     if let err = ensureHelperOnDevice(adb: adb) { throw TetherError.message(err) }
     let action = on ? "start" : "stop"
-    runCmd(adb, ["shell", "CLASSPATH=\(dexRemotePath) app_process /system/bin Main \(kind.helperType) \(action)"], timeout: 30)
-    // Start/stop can drop adb for a few seconds — poll the ground truth
-    // (dumpsys) until it settles instead of checking once.
-    if pollTetherState(adb: adb, kind: kind, wantOn: on) {
-        return on ? "\(kind.label) tethering is ON." : "\(kind.label) tethering is OFF."
+    runCmd(adb, ["shell", "CLASSPATH=\(dexRemotePath) app_process /system/bin Main \(kind.helperType!) \(action)"], timeout: 30)
+    // Start/stop can drop adb for a few seconds — poll the ground truth until
+    // it settles instead of checking once.
+    if pollState(adb: adb, kind: kind, wantOn: on) {
+        return on ? "\(kind.noun) is ON." : "\(kind.noun) is OFF."
     }
     if on {
-        throw TetherError.message("Could not confirm \(kind.label) tethering turned on. Unlock the phone and try again.")
+        throw TetherError.message("Could not confirm \(kind.noun) turned on. Unlock the phone and try again.")
     } else {
-        throw TetherError.message("\(kind.label) tethering still shows as active. Try again.")
+        throw TetherError.message("\(kind.noun) still shows as active. Try again.")
     }
 }
 
@@ -197,22 +247,29 @@ func setTethering(_ kind: TetherKind, on: Bool) throws -> String {
 
 func runCLI(_ args: [String]) -> Int32 {
     if args.contains("--print-states") {
-        guard let adb = findAdb() else { print("usb=unknown lan=unknown (no adb)"); return 1 }
-        guard waitForDevice(adb: adb, timeout: 10) else { print("usb=unknown lan=unknown (no device)"); return 1 }
+        let unknown = "usb=unknown lan=unknown hotspot=unknown wifi=unknown"
+        guard let adb = findAdb() else { print("\(unknown) (no adb)"); return 1 }
+        guard waitForDevice(adb: adb, timeout: 10) else { print("\(unknown) (no device)"); return 1 }
         let ifaces = fetchTetheredIfaces(adb: adb)
         let usb = ifaces.contains(where: { kindMatches(iface: $0, kind: .usb) })
         let lan = ifaces.contains(where: { kindMatches(iface: $0, kind: .lan) })
-        print("usb=\(usb ? "on" : "off") lan=\(lan ? "on" : "off")")
+        let hotspot = ifaces.contains(where: { kindMatches(iface: $0, kind: .hotspot) })
+        let wifi = isWifiOn(adb: adb)
+        print("usb=\(usb ? "on" : "off") lan=\(lan ? "on" : "off") hotspot=\(hotspot ? "on" : "off") wifi=\(wifi ? "on" : "off")")
         return 0
     }
-    let kind: TetherKind?
+    let kind: ToggleKind?
     let on: Bool?
     if args.contains("--on") { kind = .usb; on = true }
     else if args.contains("--off") { kind = .usb; on = false }
     else if args.contains("--lan-on") { kind = .lan; on = true }
     else if args.contains("--lan-off") { kind = .lan; on = false }
+    else if args.contains("--hotspot-on") { kind = .hotspot; on = true }
+    else if args.contains("--hotspot-off") { kind = .hotspot; on = false }
+    else if args.contains("--wifi-on") { kind = .wifi; on = true }
+    else if args.contains("--wifi-off") { kind = .wifi; on = false }
     else {
-        print("Usage: MacTether --on | --off | --lan-on | --lan-off | --print-states")
+        print("Usage: MacTether --on | --off | --lan-on | --lan-off | --hotspot-on | --hotspot-off | --wifi-on | --wifi-off | --print-states")
         return 2
     }
     do {
@@ -235,8 +292,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var usbOffItem: NSMenuItem!
     var lanOnItem: NSMenuItem!
     var lanOffItem: NSMenuItem!
+    var hotspotOnItem: NSMenuItem!
+    var hotspotOffItem: NSMenuItem!
+    var wifiOnItem: NSMenuItem!
+    var wifiOffItem: NSMenuItem!
     var autoItem: NSMenuItem!
     var statusLine: NSMenuItem!
+
+    var toggleItems: [NSMenuItem] {
+        [usbOnItem, usbOffItem, lanOnItem, lanOffItem,
+         hotspotOnItem, hotspotOffItem, wifiOnItem, wifiOffItem]
+    }
 
     let autoKey = "autoEnableUsbOnReconnect"
     let opLock = NSLock()
@@ -266,7 +332,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         usbOffItem = NSMenuItem(title: "Turn USB Tethering Off", action: #selector(turnUsbOff), keyEquivalent: "")
         lanOnItem = NSMenuItem(title: "Turn LAN Tethering On", action: #selector(turnLanOn), keyEquivalent: "")
         lanOffItem = NSMenuItem(title: "Turn LAN Tethering Off", action: #selector(turnLanOff), keyEquivalent: "")
-        for item in [usbOnItem, usbOffItem, lanOnItem, lanOffItem] as [NSMenuItem] { item.target = self }
+        hotspotOnItem = NSMenuItem(title: "Turn Hotspot On", action: #selector(turnHotspotOn), keyEquivalent: "")
+        hotspotOffItem = NSMenuItem(title: "Turn Hotspot Off", action: #selector(turnHotspotOff), keyEquivalent: "")
+        wifiOnItem = NSMenuItem(title: "Turn Wi-Fi On", action: #selector(turnWifiOn), keyEquivalent: "")
+        wifiOffItem = NSMenuItem(title: "Turn Wi-Fi Off", action: #selector(turnWifiOff), keyEquivalent: "")
+        for item in toggleItems { item.target = self }
         autoItem = NSMenuItem(title: "Auto-enable USB on reconnect", action: #selector(toggleAuto), keyEquivalent: "")
         autoItem.target = self
         autoItem.state = autoEnabled ? .on : .off
@@ -276,6 +346,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(usbOffItem)
         menu.addItem(lanOnItem)
         menu.addItem(lanOffItem)
+        menu.addItem(hotspotOnItem)
+        menu.addItem(hotspotOffItem)
+        menu.addItem(wifiOnItem)
+        menu.addItem(wifiOffItem)
         menu.addItem(.separator())
         menu.addItem(autoItem)
         menu.addItem(.separator())
@@ -289,9 +363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func setBusy(_ busy: Bool, note: String) {
         DispatchQueue.main.async {
-            for item in [self.usbOnItem, self.usbOffItem, self.lanOnItem, self.lanOffItem] as [NSMenuItem] {
-                item.isEnabled = !busy
-            }
+            for item in self.toggleItems { item.isEnabled = !busy }
             self.statusLine.title = note
         }
     }
@@ -316,6 +388,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func turnUsbOff() { runAction(kind: .usb, on: false) }
     @objc func turnLanOn() { runAction(kind: .lan, on: true) }
     @objc func turnLanOff() { runAction(kind: .lan, on: false) }
+    @objc func turnHotspotOn() { runAction(kind: .hotspot, on: true) }
+    @objc func turnHotspotOff() { runAction(kind: .hotspot, on: false) }
+    @objc func turnWifiOn() { runAction(kind: .wifi, on: true) }
+    @objc func turnWifiOff() { runAction(kind: .wifi, on: false) }
 
     @objc func toggleAuto() {
         autoEnabled = !autoEnabled
@@ -323,9 +399,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setNote(autoEnabled ? "Auto-enable on reconnect: on." : "Auto-enable on reconnect: off.")
     }
 
-    func runAction(kind: TetherKind, on: Bool) {
+    func runAction(kind: ToggleKind, on: Bool) {
         guard tryBeginOp() else { return }
-        setBusy(true, note: on ? "Turning \(kind.label) tethering on…" : "Turning \(kind.label) tethering off…")
+        setBusy(true, note: on ? "Turning \(kind.noun) on…" : "Turning \(kind.noun) off…")
         DispatchQueue.global().async {
             defer { self.endOp() }
             defer { self.refreshMenuStates() }
@@ -336,7 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.setBusy(false, note: m)
                 DispatchQueue.main.async {
                     let alert = NSAlert()
-                    alert.messageText = "\(kind.label) tethering failed"
+                    alert.messageText = "\(kind.noun) failed"
                     alert.informativeText = m
                     alert.addButton(withTitle: "OK")
                     alert.runModal()
@@ -393,9 +469,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if !seen {
                         // Phone gone: state unknown — dash all toggles.
                         DispatchQueue.main.async {
-                            for item in [self.usbOnItem, self.usbOffItem, self.lanOnItem, self.lanOffItem] as [NSMenuItem] {
-                                item.state = .mixed
-                            }
+                            for item in self.toggleItems { item.state = .mixed }
                             self.statusLine.title = "Phone not connected."
                         }
                     }
@@ -420,11 +494,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let ifaces = fetchTetheredIfaces(adb: adb)
             let usb = ifaces.contains(where: { kindMatches(iface: $0, kind: .usb) })
             let lan = ifaces.contains(where: { kindMatches(iface: $0, kind: .lan) })
+            let hotspot = ifaces.contains(where: { kindMatches(iface: $0, kind: .hotspot) })
+            let wifi = isWifiOn(adb: adb)
             DispatchQueue.main.async {
                 self.usbOnItem.state = usb ? .on : .off
                 self.usbOffItem.state = usb ? .off : .on
                 self.lanOnItem.state = lan ? .on : .off
                 self.lanOffItem.state = lan ? .off : .on
+                self.hotspotOnItem.state = hotspot ? .on : .off
+                self.hotspotOffItem.state = hotspot ? .off : .on
+                self.wifiOnItem.state = wifi ? .on : .off
+                self.wifiOffItem.state = wifi ? .off : .on
             }
         }
     }
@@ -454,7 +534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Entry
 
 let cliArgs = CommandLine.arguments
-if cliArgs.contains("--on") || cliArgs.contains("--off") || cliArgs.contains("--lan-on") || cliArgs.contains("--lan-off") || cliArgs.contains("--print-states") || cliArgs.contains("--help") || cliArgs.contains("-h") {
+if cliArgs.contains("--on") || cliArgs.contains("--off") || cliArgs.contains("--lan-on") || cliArgs.contains("--lan-off") || cliArgs.contains("--hotspot-on") || cliArgs.contains("--hotspot-off") || cliArgs.contains("--wifi-on") || cliArgs.contains("--wifi-off") || cliArgs.contains("--print-states") || cliArgs.contains("--help") || cliArgs.contains("-h") {
     exit(runCLI(cliArgs))
 }
 let app = NSApplication.shared
