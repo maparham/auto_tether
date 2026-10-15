@@ -71,14 +71,29 @@ func runCmd(_ launchPath: String, _ args: [String], timeout: TimeInterval = 30) 
     proc.standardOutput = pipe
     proc.standardError = pipe
     do { try proc.run() } catch { return (-1, "failed to launch \(launchPath): \(error)") }
-    let group = DispatchGroup()
-    group.enter()
-    DispatchQueue.global().async { proc.waitUntilExit(); group.leave() }
-    if group.wait(timeout: .now() + timeout) == .timedOut {
-        proc.terminate()
+    // Wait via terminationHandler (reliable child-death notification) — NOT a
+    // worker thread blocked in waitUntilExit(): that pattern leaked a thread +
+    // pipe FDs forever whenever the exit notification was missed, and after
+    // hours of adb hiccups the process accumulated ~2.5k pipes / 54 stuck
+    // threads and could no longer spawn adb at all.
+    let done = DispatchSemaphore(value: 0)
+    proc.terminationHandler = { _ in done.signal() }
+    if done.wait(timeout: .now() + timeout) == .timedOut {
+        proc.terminate() // SIGTERM…
+        if done.wait(timeout: .now() + 2) == .timedOut {
+            kill(proc.processIdentifier, SIGKILL) // …then force — always reaps
+            _ = done.wait(timeout: .now() + 2)
+        }
+        proc.terminationHandler = nil
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        try? pipe.fileHandleForReading.close()
+        try? pipe.fileHandleForWriting.close()
         return (-1, "timed out after \(Int(timeout))s: \(launchPath) \(args.joined(separator: " "))")
     }
+    proc.terminationHandler = nil
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    try? pipe.fileHandleForReading.close()
+    try? pipe.fileHandleForWriting.close()
     return (proc.terminationStatus, String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
 }
 
@@ -396,15 +411,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func runAction(kind: ToggleKind, on: Bool) {
-        guard tryBeginOp() else { return }
+        guard tryBeginOp() else {
+            watchLog("manual: \(kind.label) \(on ? "on" : "off") ignored — another action is running")
+            setNote("Busy — try again in a moment.")
+            return
+        }
+        watchLog("manual: \(kind.label) \(on ? "on" : "off") requested")
         setBusy(true, note: on ? "Turning \(kind.noun) on…" : "Turning \(kind.noun) off…")
         DispatchQueue.global().async {
             defer { self.endOp() }
             defer { self.refreshMenuStates() }
             do {
                 let msg = try setTethering(kind, on: on)
+                self.watchLog("manual result: \(msg)")
                 self.setBusy(false, note: msg)
             } catch TetherError.message(let m) {
+                self.watchLog("manual failed: \(m)")
                 self.setBusy(false, note: m)
                 DispatchQueue.main.async {
                     let alert = NSAlert()
@@ -516,11 +538,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func runAutoEnable() {
         guard tryBeginOp() else { watchLog("auto-enable skipped (manual op running)"); return } // a manual action is running — leave it alone
-        watchLog("auto-enable: phone reconnected, enabling USB tethering")
-        setBusy(true, note: "Phone reconnected — enabling USB tethering…")
+        watchLog("auto-enable: phone reconnected, checking USB tethering")
+        setBusy(true, note: "Phone reconnected — checking USB tethering…")
         DispatchQueue.global().async {
             defer { self.endOp() }
             defer { self.refreshMenuStates() }
+            // A flap (USB re-enumeration, adb hiccup) looks like a reconnect; if
+            // USB tethering is already on there's nothing to do — and re-running
+            // startTethering would reconfigure USB for nothing. Today most
+            // "auto-enable result: ON" runs were exactly that.
+            if let adb = findAdb(), currentState(adb: adb, kind: .usb) == true {
+                self.watchLog("auto-enable: already on, nothing to do")
+                self.setBusy(false, note: "USB tethering is ON.")
+                return
+            }
             do {
                 let msg = try setTethering(.usb, on: true)
                 self.watchLog("auto-enable result: \(msg)")
