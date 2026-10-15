@@ -23,6 +23,7 @@ if [ -z "$DEX" ]; then
 fi
 cp "$DEX" "$APP/Contents/Resources/tether.dex"
 cp "$DEX" res/tether.dex 2>/dev/null || true
+cp res/*.png "$APP/Contents/Resources/" 2>/dev/null || true
 cp Info.plist "$APP/Contents/"
 
 codesign --force --deep --sign - "$APP" 2>/dev/null || true

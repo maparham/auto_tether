@@ -346,13 +346,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let menu = NSMenu()
         usbItem = NSMenuItem(title: "USB Tethering", action: #selector(toggleUsb), keyEquivalent: "")
-        usbItem.image = menuIcon("iphone")
+        usbItem.image = assetIcon("usb", fallback: "iphone")
         lanItem = NSMenuItem(title: "LAN Tethering", action: #selector(toggleLan), keyEquivalent: "")
-        lanItem.image = menuIcon("cable.connector.horizontal")
+        lanItem.image = assetIcon("lan", fallback: "cable.connector.horizontal")
         hotspotItem = NSMenuItem(title: "Hotspot", action: #selector(toggleHotspot), keyEquivalent: "")
-        hotspotItem.image = menuIcon("wifi.circle")
+        hotspotItem.image = assetIcon("hotspot", fallback: "wifi.circle")
         wifiItem = NSMenuItem(title: "Wi-Fi", action: #selector(toggleWifi), keyEquivalent: "")
-        wifiItem.image = menuIcon("wifi")
+        wifiItem.image = assetIcon("wifi", fallback: "wifi")
         for item in toggleItems { item.target = self }
         autoItem = NSMenuItem(title: "Auto-enable USB on reconnect", action: #selector(toggleAuto), keyEquivalent: "")
         autoItem.target = self
@@ -382,6 +382,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let img = NSImage(systemSymbolName: name, accessibilityDescription: name) else { return nil }
         img.isTemplate = true
         return img
+    }
+
+    /// Bundled image asset as a menu icon (template rendering via the alpha
+    /// channel, so it follows light/dark mode). Falls back to an SF Symbol.
+    func assetIcon(_ resource: String, fallback: String) -> NSImage? {
+        if let url = Bundle.main.url(forResource: resource, withExtension: "png"),
+           let img = NSImage(contentsOf: url) {
+            img.isTemplate = true
+            img.size = NSSize(width: 16, height: 16)
+            return img
+        }
+        return menuIcon(fallback)
     }
 
     func setBusy(_ busy: Bool, note: String) {
