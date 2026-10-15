@@ -346,12 +346,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let menu = NSMenu()
         usbItem = NSMenuItem(title: "USB Tethering", action: #selector(toggleUsb), keyEquivalent: "")
+        usbItem.image = menuIcon("cable.connector")
         lanItem = NSMenuItem(title: "LAN Tethering", action: #selector(toggleLan), keyEquivalent: "")
+        lanItem.image = menuIcon("network")
         hotspotItem = NSMenuItem(title: "Hotspot", action: #selector(toggleHotspot), keyEquivalent: "")
+        hotspotItem.image = menuIcon("personalhotspot")
         wifiItem = NSMenuItem(title: "Wi-Fi", action: #selector(toggleWifi), keyEquivalent: "")
+        wifiItem.image = menuIcon("wifi")
         for item in toggleItems { item.target = self }
         autoItem = NSMenuItem(title: "Auto-enable USB on reconnect", action: #selector(toggleAuto), keyEquivalent: "")
         autoItem.target = self
+        autoItem.image = menuIcon("bolt.circle")
         autoItem.state = autoEnabled ? .on : .off
         statusLine = NSMenuItem(title: "Ready", action: nil, keyEquivalent: "")
         statusLine.isEnabled = false
@@ -365,9 +370,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(statusLine)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quit.image = menuIcon("power")
         menu.addItem(quit)
         statusItem.menu = menu
         startWatcher()
+    }
+
+    /// Template SF Symbol for a menu item (nil when the symbol is unavailable
+    /// on this macOS version — the item then simply shows no icon).
+    func menuIcon(_ name: String) -> NSImage? {
+        guard let img = NSImage(systemSymbolName: name, accessibilityDescription: name) else { return nil }
+        img.isTemplate = true
+        return img
     }
 
     func setBusy(_ busy: Bool, note: String) {
