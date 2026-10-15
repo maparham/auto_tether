@@ -346,11 +346,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let menu = NSMenu()
         usbItem = NSMenuItem(title: "USB Tethering", action: #selector(toggleUsb), keyEquivalent: "")
-        usbItem.image = menuIcon("cable.connector")
+        usbItem.image = menuIcon("iphone")
         lanItem = NSMenuItem(title: "LAN Tethering", action: #selector(toggleLan), keyEquivalent: "")
-        lanItem.image = menuIcon("network")
+        lanItem.image = menuIcon("cable.connector.horizontal")
         hotspotItem = NSMenuItem(title: "Hotspot", action: #selector(toggleHotspot), keyEquivalent: "")
-        hotspotItem.image = menuIcon("personalhotspot")
+        hotspotItem.image = menuIcon("wifi.circle")
         wifiItem = NSMenuItem(title: "Wi-Fi", action: #selector(toggleWifi), keyEquivalent: "")
         wifiItem.image = menuIcon("wifi")
         for item in toggleItems { item.target = self }
