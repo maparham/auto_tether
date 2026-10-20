@@ -4,6 +4,7 @@ out/
 *.dex
 *.apk
 MacTether/MacTether.app/
+MacTether/*.zip
 
 # signing key — generated locally by build.sh, never commit
 *.keystore
