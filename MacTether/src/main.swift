@@ -161,7 +161,10 @@ func fetchTetheredIfaces(adb: String) -> [String]? {
     // Filter on-device: full `dumpsys tethering` is ~180KB (would block the
     // capture pipe), the grep reduces it to a few lines.
     let (code, out) = runCmd(adb, ["shell", "dumpsys tethering | grep TetheredState"], timeout: 15)
-    guard code == 0 else { return nil }
+    // grep exits 1 when it simply finds no match — the normal, successful
+    // result once nothing is tethered, not a query failure. Only other exit
+    // codes (grep error, or -1 from an adb timeout) mean the query failed.
+    guard code == 0 || code == 1 else { return nil }
     var ifaces: [String] = []
     for line in out.split(separator: "\n") {
         let t = line.trimmingCharacters(in: .whitespaces)
