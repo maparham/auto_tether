@@ -247,11 +247,22 @@ func setTethering(_ kind: ToggleKind, on: Bool) throws -> String {
 
     if let err = ensureHelperOnDevice(adb: adb) { throw TetherError.message(err) }
     let action = on ? "start" : "stop"
-    runCmd(adb, ["shell", "CLASSPATH=\(dexRemotePath) app_process /system/bin Main \(kind.helperType!) \(action)"], timeout: 30)
+    let (_, out) = runCmd(adb, ["shell", "CLASSPATH=\(dexRemotePath) app_process /system/bin Main \(kind.helperType!) \(action)"], timeout: 30)
     // Start/stop can drop adb for a few seconds — poll the ground truth until
     // it settles instead of checking once.
     if pollState(adb: adb, kind: kind, wantOn: on) {
         return on ? "\(kind.noun) is ON." : "\(kind.noun) is OFF."
+    }
+    // error=18 (DUPLICATE_REQUEST) with no live interface means a stale/wedged
+    // request from an earlier attempt, not a real tether — a fresh start keeps
+    // bouncing off it. Clear it once with stop→start, same fix the on-phone
+    // AutoTether app already applies for this exact case.
+    if on && out.contains("error=18") {
+        runCmd(adb, ["shell", "CLASSPATH=\(dexRemotePath) app_process /system/bin Main \(kind.helperType!) stop"], timeout: 30)
+        runCmd(adb, ["shell", "CLASSPATH=\(dexRemotePath) app_process /system/bin Main \(kind.helperType!) start"], timeout: 30)
+        if pollState(adb: adb, kind: kind, wantOn: on) {
+            return "\(kind.noun) is ON."
+        }
     }
     if on {
         throw TetherError.message("Could not confirm \(kind.noun) turned on. Unlock the phone and try again.")
