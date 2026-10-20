@@ -248,17 +248,24 @@ func setTethering(_ kind: ToggleKind, on: Bool) throws -> String {
     if let err = ensureHelperOnDevice(adb: adb) { throw TetherError.message(err) }
     let action = on ? "start" : "stop"
     let (_, out) = runCmd(adb, ["shell", "CLASSPATH=\(dexRemotePath) app_process /system/bin Main \(kind.helperType!) \(action)"], timeout: 30)
+    // error=18 (DUPLICATE_REQUEST) fires both for an already-live USB tether and
+    // for a stale/wedged request from an earlier attempt that never brought the
+    // interface up. Either way the state is already decided, so check briefly
+    // rather than waiting out the full poll before trying the reset below.
+    let duplicate = on && kind == .usb && out.contains("error=18")
     // Start/stop can drop adb for a few seconds — poll the ground truth until
     // it settles instead of checking once.
-    if pollState(adb: adb, kind: kind, wantOn: on) {
+    if pollState(adb: adb, kind: kind, wantOn: on, timeout: duplicate ? 8 : 25) {
         return on ? "\(kind.noun) is ON." : "\(kind.noun) is OFF."
     }
-    // error=18 (DUPLICATE_REQUEST) with no live interface means a stale/wedged
-    // request from an earlier attempt, not a real tether — a fresh start keeps
+    // Duplicate request with no live interface → wedged; a fresh start keeps
     // bouncing off it. Clear it once with stop→start, same fix the on-phone
-    // AutoTether app already applies for this exact case.
-    if on && out.contains("error=18") {
+    // AutoTether app applies. Unlike the phone (local adb), our adb runs over
+    // the very USB link the stop reconfigures, so wait for it to come back
+    // before sending the start.
+    if duplicate {
         runCmd(adb, ["shell", "CLASSPATH=\(dexRemotePath) app_process /system/bin Main \(kind.helperType!) stop"], timeout: 30)
+        _ = waitForDevice(adb: adb, timeout: 10)
         runCmd(adb, ["shell", "CLASSPATH=\(dexRemotePath) app_process /system/bin Main \(kind.helperType!) start"], timeout: 30)
         if pollState(adb: adb, kind: kind, wantOn: on) {
             return "\(kind.noun) is ON."
